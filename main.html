@@ -1,0 +1,1619 @@
+<!doctype html>
+<!--
+=======================================================================
+  الملف: main.html
+  المشروع: منصة شكاوى لجنة الحج
+  الوصف: تطبيق React (يعمل من المتصفح مباشرة) متصل بـ Supabase.
+  يعتمد على: config.js (الاتصال، التصنيفات، قواعد التنبيهات) + supabase/schema.sql
+
+  الصفحات:
+    1) المشتكي (الرابط الأساسي): خانة كلمة المرور أولاً (عامة أو خاصة حسب إعداد الأدمن)، وتحتها
+       زر «تقديم شكوى مباشرة» إن فعّله الأدمن ← الاسم، رقم التواصل، اسم المشتكى عليه، نص الاعتراض
+       ← «تم تسجيل الشكوى بنجاح» مع رقم الشكوى ورمز المتابعة.
+    2) نتيجة الشكوى (‎#/result): الشكاوى المحفوظة على الجهاز تلقائياً، أو بالرقم + رمز المتابعة
+       ← الحالة والنتيجة وتاريخ الإغلاق فقط.
+    3) الأدمن (‎#/admin): «المطلوب» (تنبيهات ذكية) وجدول الشكاوى (اختيار عدة صفوف وتغييرها معاً،
+       وتصدير Excel)، إعدادات دخول المشتكين، وكلمات مرور الإدارة.
+    4) التقارير (‎#/reports): بكلمة مرور الإدارة — أعداد الشكاوى خلال فترة وجدول بحالاتها.
+
+  ملاحظات:
+    - الحالات: جديد / قيد المراجعة / جاري المتابعة / مغلقة (تُستخدم أسماء لاتينية للألوان: new/review/follow/closed).
+    - الموقع لا يقرأ الجداول مباشرة؛ كل العمليات عبر دوال Supabase تتحقق من المدخلات داخلها.
+    - كلمتا الأدمن والإدارة تُحفظان في sessionStorage؛ شكاوى المشتكي (الرقم + الرمز) في localStorage.
+    - قاعدة معتمدة: تصميم ثابت على الجوال (لا تمرير أفقي للصفحة؛ الجداول داخل إطار قابل للتمرير).
+
+  سجل التعديلات:
+    2026-09-24  الإصدار الأول، ثم عدة إعادات تصميم (ثلاث صفحات، جدول كلمات مرور موحّد، ألوان الحالات،
+                إلغاء واتساب، زر إظهار كلمة المرور، التنبيهات الذكية وتبويب «المطلوب» بفترات).
+    2026-09-24  الحالات الجديدة: جديد / قيد المراجعة / جاري المتابعة / مغلقة.
+                وضع دخول المشتكين قابل للتحكم (مفتوح / عامة / خاصة). رقم الشكوى ورمز المتابعة
+                وصفحة «نتيجة الشكوى». جدول الشكاوى بدل البطاقات: اختيار عدة صفوف وتغييرها معاً،
+                نافذة تفاصيل للتعديل الفردي، وتصدير Excel.
+    2026-09-24  جدول الأدمن: أسهم فرز على العناوين، عدد الأسطر (10/50/100) مع صفحات، قائمة لإظهار
+                وإخفاء الأعمدة، وتكبير/تصغير الخط؛ التفضيلات تُحفظ على الجهاز.
+    2026-09-24  صفحة كلمة المرور تبقى أولاً (عامة أو خاصة) مع زر «تقديم شكوى مباشرة» يُظهره أو
+                يخفيه الأدمن بمفتاح؛ إضافة رقم التواصل للنموذج والجدول والتفاصيل والتصدير.
+    2026-09-24  مفتاح زر التقديم المباشر يُحفظ فوراً عند الضغط (كان يحتاج زر «حفظ» فلا يُطبَّق).
+    2026-09-27  رابط واحد لكل المنصة: شريط سفلي بروابط الرئيسية ونتيجة الشكوى والإدارة والتقارير.
+=======================================================================
+-->
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<!-- عرض مناسب للجوال، مع دعم حواف الشاشات الحديثة -->
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>منصة شكاوى لجنة الحج</title>
+<!-- الخط العربي Tajawal -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet">
+<style>
+  /* متغيرات الألوان والأبعاد الموحدة للمنصة */
+  :root {
+    --bg: #f4f5f1;
+    --card: #ffffff;
+    --ink: #1c2a23;
+    --muted: #65736b;
+    --line: #e2e6e0;
+    --brand: #0e6b4f;
+    --brand-dark: #0a4f3b;
+    --brand-soft: #e6f2ec;
+    --gold: #b8913a;
+    --danger: #b42318;
+    --danger-soft: #fdecea;
+    --ok: #067647;
+    --ok-soft: #e7f6ee;
+    --radius: 12px;
+    --shadow: 0 1px 2px rgba(20, 40, 30, .06), 0 4px 16px rgba(20, 40, 30, .05);
+  }
+
+  /* إعدادات أساسية: الخط، الخلفية، وتثبيت حجم النص على الجوال عند تدوير الشاشة */
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink); overflow-x: hidden;
+    font-family: "Tajawal", "Segoe UI", Tahoma, sans-serif; font-size: 15px; line-height: 1.6;
+  }
+  a { color: var(--brand); }
+  button, input, select, textarea { font: inherit; color: inherit; }
+
+  /* الشريط العلوي: الشعار واسم الصفحة وزر الخروج (مع مراعاة حافة الشاشة في الجوال) */
+  .topbar { background: var(--brand-dark); color: #fff; padding-top: env(safe-area-inset-top, 0px); }
+  .topbar-inner { max-width: 1200px; margin: 0 auto; padding: 12px 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 800; font-size: 17px; color: #fff; min-width: 0; text-decoration: none; }
+  .brand small { font-weight: 500; opacity: .75; font-size: 14px; }
+  .brand-mark { width: 34px; height: 34px; border-radius: 9px; background: var(--gold); display: grid; place-items: center; font-size: 18px; flex: none; }
+
+  /* الحاوية الرئيسية */
+  .container { max-width: 1200px; margin: 0 auto; padding: 24px 16px; padding-bottom: calc(48px + env(safe-area-inset-bottom, 0px)); }
+  .narrow { max-width: 480px; margin: 0 auto; }
+
+  /* رأس الصفحة: العنوان والوصف */
+  .page-head { margin-bottom: 16px; }
+  .page-head h1 { margin: 0; font-size: 22px; font-weight: 800; }
+  .page-head p { margin: 4px 0 0; color: var(--muted); }
+
+  /* البطاقات البيضاء */
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); padding: 20px; }
+  .card + .card { margin-top: 14px; }
+  .card h2 { margin: 0 0 12px; font-size: 17px; }
+
+  /* حقول النماذج؛ خط 16px يمنع التكبير التلقائي في iPhone */
+  .grid { display: grid; gap: 12px 16px; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+  .field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+  .field.full { grid-column: 1 / -1; }
+  .field-label { font-weight: 600; font-size: 14px; }
+  .req { color: var(--danger); margin-inline-start: 3px; }
+  .hint { color: var(--muted); font-size: 12.5px; }
+  input, select, textarea {
+    width: 100%; padding: 10px 12px; border: 1px solid #cfd6cf; border-radius: 9px; background: #fff;
+    outline: none; font-size: 16px; transition: border-color .15s, box-shadow .15s;
+  }
+  input[type=checkbox] { width: 18px; height: 18px; padding: 0; accent-color: var(--brand); cursor: pointer; }
+  input:focus, select:focus, textarea:focus { border-color: var(--brand); box-shadow: 0 0 0 3px rgba(14,107,79,.15); }
+  textarea { min-height: 110px; resize: vertical; }
+  /* خانة الرمز: كبيرة ومتباعدة في المنتصف */
+  input.code-input { text-align: center; font-size: 24px; letter-spacing: 6px; font-weight: 700; direction: ltr; }
+  /* خانة كلمة المرور المخفية: في المنتصف مع زر إظهار/إخفاء */
+  input.secret-input { text-align: center; font-size: 20px; letter-spacing: 2px; direction: ltr; padding-inline: 48px; }
+  .pw-wrap { position: relative; }
+  .pw-toggle { position: absolute; top: 50%; transform: translateY(-50%); inset-inline-start: 6px; width: 38px; height: 38px; border: 0; background: transparent; cursor: pointer; font-size: 20px; border-radius: 8px; }
+  .pw-toggle:hover { background: #f0f2ef; }
+
+  /* الأزرار */
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 44px; border: 1px solid transparent; border-radius: 10px; padding: 9px 16px; font-weight: 700; font-size: 15px; cursor: pointer; background: var(--brand); color: #fff; text-decoration: none; white-space: nowrap; }
+  .btn:hover { background: var(--brand-dark); }
+  .btn:disabled { opacity: .55; cursor: not-allowed; }
+  .btn.gold { background: var(--gold); }
+  .btn.secondary { background: #fff; color: var(--ink); border-color: #cfd6cf; }
+  .btn.secondary:hover { background: #f3f5f2; }
+  .btn.danger-text { background: none; color: var(--danger); border: 0; min-height: 0; padding: 4px 6px; }
+  .btn.sm { min-height: 36px; padding: 6px 12px; font-size: 14px; }
+  .btn.ghost { min-height: 34px; padding: 4px 12px; font-size: 14px; background: transparent; border-color: rgba(255,255,255,.3); color: #e3f1ea; }
+  .btn.block { width: 100%; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  .row > .grow { flex: 1 1 180px; }
+
+  /* رسائل التنبيه */
+  .alert { padding: 11px 14px; border-radius: 9px; margin-bottom: 14px; font-weight: 500; }
+  .alert.error { background: var(--danger-soft); color: var(--danger); }
+  .alert.ok { background: var(--ok-soft); color: var(--ok); }
+  .alert.info { background: #eaf2fd; color: #1d5fbf; }
+
+  /* ألوان الحالات: جديد برتقالي، قيد المراجعة أزرق، جاري المتابعة بنفسجي، مغلقة أخضر
+     (--st لون الحالة الأساسي، --st-soft خلفيته الفاتحة) */
+  .st-new { --st: #c2610c; --st-soft: #fff4e6; }
+  .st-review { --st: #1d5fbf; --st-soft: #eaf2fd; }
+  .st-follow { --st: #7a3fb8; --st-soft: #f3ecfb; }
+  .st-closed { --st: #16803c; --st-soft: #e8f6ed; }
+
+  /* شارة الحالة بلونها */
+  .badge { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 13px; font-weight: 700; white-space: nowrap; background: var(--st-soft, #eef0ed); color: var(--st, #46534c); border: 1px solid var(--st, transparent); }
+
+  /* بطاقة الشكوى (في نافذة التفاصيل) بلون حالتها: شريط جانبي وخلفية فاتحة */
+  .card.status-card { border-inline-start: 6px solid var(--st); background: linear-gradient(to left, var(--st-soft), #fff 70%); }
+  .card.status-card .c-no { color: var(--st); }
+
+  /* صف جدول بلون حالته */
+  table tr.status-row td:first-child { border-inline-start: 5px solid var(--st); }
+  table tr.status-row { background: var(--st-soft); }
+
+  /* صفحات الدخول: الشعار الكبير والعنوان */
+  .hero { text-align: center; margin: 8px 0 18px; }
+  .hero .brand-mark { width: 64px; height: 64px; font-size: 34px; border-radius: 16px; margin: 0 auto 10px; }
+  .hero h1 { margin: 0; font-size: 22px; font-weight: 800; }
+  .hero p { margin: 4px 0 0; color: var(--muted); }
+  .below-link { text-align: center; margin-top: 16px; }
+
+  /* رسالة النجاح ورقم الشكوى ورمز المتابعة */
+  .done { text-align: center; padding: 30px 20px; }
+  .done .icon { font-size: 56px; line-height: 1; }
+  .done h2 { margin: 14px 0 6px; font-size: 22px; color: var(--ok); }
+  .ticket { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 18px 0 8px; }
+  .ticket div { background: #f3f7f4; border: 2px dashed #b9d3c5; border-radius: 12px; padding: 10px 6px; }
+  .ticket small { display: block; color: var(--muted); font-weight: 600; }
+  .ticket b { display: block; font-size: 22px; letter-spacing: 2px; direction: ltr; color: var(--brand-dark); }
+
+  /* التبويبات وأزرار التصفية (قابلة للتمرير أفقياً على الجوال) */
+  .tabs { display: flex; gap: 4px; background: #e9ece7; border-radius: 11px; padding: 4px; margin-bottom: 16px; overflow-x: auto; scrollbar-width: none; }
+  .tabs::-webkit-scrollbar { display: none; }
+  .tabs button { flex: 1 0 auto; border: 0; background: transparent; padding: 8px 14px; border-radius: 8px; cursor: pointer; font-weight: 700; color: var(--muted); white-space: nowrap; }
+  .tabs button.active { background: #fff; color: var(--ink); box-shadow: var(--shadow); }
+  .tab-count { display: inline-block; min-width: 22px; padding: 0 6px; margin-inline-start: 6px; border-radius: 999px; background: #c0262d; color: #fff; font-size: 12.5px; line-height: 20px; }
+  .chips { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; margin-bottom: 12px; }
+  .chips::-webkit-scrollbar { display: none; }
+  .chips button { border: 1px solid var(--line); background: #fff; padding: 5px 12px; border-radius: 999px; cursor: pointer; font-weight: 600; white-space: nowrap; font-size: 14px; }
+  .chips button.active { background: var(--brand); border-color: var(--brand); color: #fff; }
+
+  /* جدول الشكاوى (مثل Excel): إطار قابل للتمرير، رأس ثابت، صفوف قابلة للاختيار */
+  .table-wrap { overflow: auto; max-height: 72vh; border-radius: var(--radius); }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { padding: 9px 10px; text-align: start; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 700; font-size: 13px; background: #fafbf9; white-space: nowrap; position: sticky; top: 0; z-index: 1; }
+  table.sheet td { white-space: nowrap; }
+  table.sheet td.wrap { white-space: normal; min-width: 220px; max-width: 320px; overflow-wrap: anywhere; }
+  table.sheet tbody tr { cursor: pointer; }
+  table.sheet tbody tr:hover td { filter: brightness(.97); }
+  table.sheet tr.selected td { background: #fff3c4 !important; }
+  table.sheet td.chk, table.sheet th.chk { width: 36px; text-align: center; }
+  .clip { display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  td.subj { max-width: 320px; overflow-wrap: anywhere; }
+
+  /* عناوين قابلة للفرز: السهم ▲ تصاعدي، ▼ تنازلي، ⇅ بلا فرز */
+  th.sortable { cursor: pointer; user-select: none; }
+  th.sortable:hover { color: var(--ink); background: #f0f3ef; }
+  .sort-arrow { font-size: 11px; color: var(--brand); margin-inline-start: 2px; }
+  .sort-arrow.off { color: #b7c0b9; }
+  table.sheet th { font-size: .9em; }
+
+  /* شريط أدوات الجدول: عدد الأسطر، الأعمدة، حجم الخط، التصدير */
+  .table-tools { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 10px; }
+  .table-tools .tool { display: flex; align-items: center; gap: 6px; font-size: 14px; font-weight: 600; color: var(--muted); }
+  .table-tools select { width: auto; min-height: 36px; padding: 5px 10px; }
+  .table-tools .tool-end { margin-inline-start: auto; }
+  .font-tools { gap: 4px !important; }
+  .font-tools .btn { min-width: 40px; }
+  .cols-menu { position: relative; }
+  .menu-back { position: fixed; inset: 0; z-index: 20; }
+  .menu { position: absolute; top: calc(100% + 6px); inset-inline-start: 0; z-index: 21; background: #fff; border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.14); padding: 8px; min-width: 200px; max-height: 60vh; overflow-y: auto; }
+  .menu label { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px; cursor: pointer; color: var(--ink); font-weight: 500; }
+  .menu label:hover { background: #f3f5f2; }
+  .pager { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 10px; font-size: 14px; }
+
+  /* شريط التغيير الجماعي: يظهر عند اختيار صف أو أكثر */
+  .bulk-bar { background: var(--brand-dark); color: #fff; border-radius: var(--radius); padding: 12px; margin-bottom: 12px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .bulk-bar b { white-space: nowrap; }
+  .bulk-bar select, .bulk-bar input { width: auto; flex: 1 1 150px; min-height: 40px; padding: 7px 10px; color: var(--ink); background: #fff; }
+  .bulk-bar .btn.secondary { background: transparent; color: #fff; border-color: rgba(255,255,255,.4); }
+
+  /* أشرطة التنبيهات: عاجل أحمر، متابعة برتقالي، تذكير أزرق، مجدول رمادي */
+  .reminder-bar { border-radius: 9px; padding: 7px 12px; margin: 4px 0 10px; font-weight: 700; font-size: 14px; }
+  .reminder-bar.danger { background: #c0262d; color: #fff; }
+  .reminder-bar.warn { background: #fff4e6; color: #c2610c; border: 1px solid #f3c99a; }
+  .reminder-bar.info { background: #eaf2fd; color: #1d5fbf; }
+  .reminder-bar.later { background: #f1f2f0; color: #5c6660; font-weight: 500; }
+  .alert-tag { display: block; font-size: 12.5px; font-weight: 700; border-radius: 6px; padding: 1px 8px; margin-bottom: 3px; white-space: normal; }
+  .alert-tag.danger { background: #c0262d; color: #fff; }
+  .alert-tag.warn { background: #ffe6cc; color: #a24f06; }
+  .alert-tag.info { background: #d9e8fc; color: #1d5fbf; }
+  .alert-tag.later { background: #eceeed; color: #5c6660; }
+  .alert-chip { padding: 4px 12px; border-radius: 999px; font-weight: 700; font-size: 14px; }
+  .alert-chip.danger { background: #fdecec; color: #c0262d; }
+  .alert-chip.warn { background: #fff4e6; color: #c2610c; }
+  .alert-chip.info { background: #eaf2fd; color: #1d5fbf; }
+  .alert-chip.later { background: #f1f2f0; color: #5c6660; }
+
+  /* نافذة تفاصيل الشكوى (فوق الصفحة) */
+  .modal-back { position: fixed; inset: 0; background: rgba(15, 25, 20, .5); z-index: 50; overflow-y: auto; padding: 24px 12px; }
+  .modal { max-width: 760px; margin: 0 auto; }
+  .modal-close { display: flex; justify-content: flex-end; margin-bottom: 8px; }
+  .c-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; margin-bottom: 8px; }
+  .c-no { font-weight: 800; direction: ltr; }
+  .meta { color: var(--muted); font-size: 13.5px; display: flex; gap: 4px 14px; flex-wrap: wrap; }
+  .subject { background: #f8f9f7; border-radius: 9px; padding: 10px 12px; margin: 10px 0 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+  /* وضع دخول المشتكين: بطاقات اختيار */
+  .modes { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; }
+  .mode { border: 2px solid var(--line); border-radius: 12px; padding: 12px 14px; cursor: pointer; background: #fff; text-align: start; }
+  .mode b { display: block; font-size: 16px; }
+  .mode span { color: var(--muted); font-size: 13.5px; }
+  .mode.active { border-color: var(--brand); background: var(--brand-soft); }
+
+  /* مفتاح تشغيل/إيقاف (زر التقديم المباشر) */
+  .switch-row { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border: 2px solid var(--line); border-radius: 12px; cursor: pointer; background: #fff; }
+  .switch-row.on { border-color: var(--brand); background: var(--brand-soft); }
+  .switch-row input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+  .switch { flex: none; width: 48px; height: 28px; border-radius: 999px; background: #c9d0ca; position: relative; transition: background .15s; }
+  .switch::after { content: ""; position: absolute; top: 3px; inset-inline-start: 3px; width: 22px; height: 22px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.25); transition: inset-inline-start .15s; }
+  .switch-row.on .switch { background: var(--brand); }
+  .switch-row.on .switch::after { inset-inline-start: 23px; }
+  .switch-row input:focus-visible + .switch { box-shadow: 0 0 0 3px rgba(14,107,79,.3); }
+
+  /* رمز جديد يظهر بخط كبير */
+  .big-code { text-align: center; font-size: 34px; font-weight: 800; letter-spacing: 4px; direction: ltr; color: var(--brand-dark); background: #f3f7f4; border: 2px dashed #b9d3c5; border-radius: 12px; padding: 10px; margin: 8px 0 12px; user-select: all; }
+
+  /* القوائم البسيطة (كلمات المرور) */
+  .list { list-style: none; margin: 0; padding: 0; }
+  .list li { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+  .list li:last-child { border-bottom: 0; }
+  .mono { direction: ltr; font-weight: 800; letter-spacing: 2px; font-family: ui-monospace, Consolas, monospace; }
+
+  /* التقارير: بطاقات الأعداد والفلتر */
+  .kpis { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 16px; }
+  .kpi { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; box-shadow: var(--shadow); border-top: 4px solid var(--brand); text-align: center; }
+  .kpi .label { color: var(--muted); font-size: 13.5px; font-weight: 600; }
+  .kpi .value { font-size: 32px; font-weight: 800; line-height: 1.2; font-variant-numeric: tabular-nums; }
+  .kpi.closed { border-top-color: #16803c; background: #e8f6ed; } .kpi.closed .value { color: #16803c; }
+  .kpi.open { border-top-color: #1d5fbf; background: #eaf2fd; } .kpi.open .value { color: #1d5fbf; }
+  .filters { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
+  .filters .field { flex: 1 1 140px; }
+
+  /* الشريط السفلي: روابط كل الصفحات من رابط واحد (يلتف على الجوال) */
+  .site-footer { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 18px; padding: 16px 16px calc(20px + env(safe-area-inset-bottom, 0px)); border-top: 1px solid var(--line); background: #fff; font-size: 14px; }
+  .site-footer a { color: var(--muted); text-decoration: none; font-weight: 600; padding: 4px 6px; border-radius: 6px; }
+  .site-footer a:hover { color: var(--brand); background: var(--brand-soft); }
+
+  /* أدوات عامة */
+  .muted { color: var(--muted); }
+  .center { text-align: center; }
+  .empty { text-align: center; color: var(--muted); padding: 30px 10px; }
+  .spinner { width: 26px; height: 26px; border: 3px solid #d7dfd9; border-top-color: var(--brand); border-radius: 50%; animation: spin .8s linear infinite; margin: 50px auto; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  code { background: #eef0ed; padding: 1px 6px; border-radius: 5px; direction: ltr; display: inline-block; }
+
+  /* الجوال (أقل من 640px): مسافات أصغر وحقول بعمود واحد؛ جدول التقارير يتحول إلى بطاقات
+     (جدول الشكاوى في الأدمن يبقى جدولاً داخل إطار قابل للتمرير مثل Excel) */
+  @media (max-width: 640px) {
+    .container { padding-top: 16px; }
+    .card { padding: 16px; }
+    .page-head h1, .hero h1 { font-size: 20px; }
+    .grid { grid-template-columns: 1fr; }
+    .brand { font-size: 15px; }
+    .brand small { display: none; }
+    .kpis { gap: 8px; }
+    .kpi { padding: 10px 6px; }
+    .kpi .value { font-size: 26px; }
+    .modal-back { padding: 10px 6px; }
+    table.stack thead { display: none; }
+    table.stack, table.stack tbody, table.stack tr, table.stack td { display: block; width: 100%; max-width: none; }
+    table.stack tr { padding: 12px 14px; border-bottom: 1px solid var(--line); }
+    table.stack td { border: 0; padding: 3px 0; }
+    table.stack td::before { content: attr(data-label); display: block; color: var(--muted); font-size: 12.5px; font-weight: 600; }
+    table.stack tr.status-row { border-inline-start: 5px solid var(--st); }
+    table.stack tr.status-row td:first-child { border-inline-start: 0; }
+  }
+</style>
+</head>
+<body>
+<!-- العنصر الذي يُعرض داخله التطبيق كاملاً -->
+<div id="root"></div>
+
+<!-- المكتبات: ملف الإعدادات، React، عميل Supabase، ومحوّل JSX (Babel) -->
+<script src="config.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4"></script>
+<script src="https://unpkg.com/@babel/standalone@7.24.7/babel.min.js"></script>
+
+<!-- كود التطبيق (React/JSX) — يُحوَّل في المتصفح مباشرة -->
+<script type="text/babel" data-presets="react">
+// استيراد خطافات React المستخدمة في المكونات
+const { useState, useEffect, useCallback } = React;
+
+// =====================================================================
+// الإعدادات والثوابت
+// =====================================================================
+// قراءة الإعدادات من config.js والتأكد من أنها ضُبطت
+const cfg = window.APP_CONFIG || {};
+const isConfigured = !!cfg.SUPABASE_URL && !cfg.SUPABASE_URL.includes("YOUR_") && !!cfg.SUPABASE_ANON_KEY && !cfg.SUPABASE_ANON_KEY.includes("YOUR_");
+const CLASSIFICATIONS = cfg.CLASSIFICATIONS || ["أخرى"];
+
+// حالات الشكوى (تطابق القيد في schema.sql) واسم لاتيني لكل حالة لاستخدامه في الألوان
+const STATUSES = ["جديد", "قيد المراجعة", "جاري المتابعة", "مغلقة"];
+const ST_KEY = { "جديد": "new", "قيد المراجعة": "review", "جاري المتابعة": "follow", "مغلقة": "closed" };
+const stClass = s => `st-${ST_KEY[s] || "new"}`;
+const CLOSED = "مغلقة";
+
+// اتصال Supabase بالمفتاح العام فقط (لا توجد حسابات مستخدمين)
+const sb = isConfigured
+  ? window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY, { auth: { persistSession: false, autoRefreshToken: false } })
+  : null;
+
+// =====================================================================
+// دوال مساعدة
+// =====================================================================
+// قراءة وكتابة آمنة في التخزين (قد يكون معطّلاً في التصفح الخاص)
+function storeGet(storage, key) { try { return storage.getItem(key); } catch { return null; } }
+function storeSet(storage, key, value) { try { value == null ? storage.removeItem(key) : storage.setItem(key, value); } catch { /* غير متاح */ } }
+
+// شكاوى المشتكي المحفوظة على جهازه: [{number, code}]
+const MY_KEY = "hajj_my_complaints";
+function myComplaints() { try { const l = JSON.parse(storeGet(localStorage, MY_KEY) || "[]"); return Array.isArray(l) ? l : []; } catch { return []; } }
+function rememberMine(number, code) { storeSet(localStorage, MY_KEY, JSON.stringify([{ number, code }, ...myComplaints().filter(x => x.number !== number)].slice(0, 20))); }
+
+// تنسيق التواريخ للعرض بالعربية مع أرقام لاتينية، وللحقول بالتوقيت المحلي
+const fmtDate = v => v ? new Date(v).toLocaleDateString("ar-u-nu-latn", { dateStyle: "medium" }) : "—";
+const fmtDateTime = v => v ? new Date(v).toLocaleString("ar-u-nu-latn", { dateStyle: "medium", timeStyle: "short" }) : "—";
+const pad = n => String(n).padStart(2, "0");
+const toDateInput = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+const dateInputToIso = s => s ? new Date(`${s}T12:00:00`).toISOString() : null;   // منتصف النهار حتى لا يتغير اليوم
+const toDateTimeInput = v => { if (!v) return ""; const d = new Date(v); return `${toDateInput(d)}T${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+const dateTimeInputToIso = s => s ? new Date(s).toISOString() : null;
+
+// رابط المنصة بدون جزء #
+const siteUrl = () => location.href.split("#")[0];
+
+// نسخ نص إلى الحافظة؛ تُرجع true عند النجاح
+async function copyText(text) { try { await navigator.clipboard.writeText(text); return true; } catch { return false; } }
+
+// متابعة الجزء بعد # في الرابط (لاختيار الصفحة)
+function useHash() {
+  const [hash, setHash] = useState(location.hash);
+  useEffect(() => {
+    const onChange = () => { setHash(location.hash); window.scrollTo(0, 0); };
+    window.addEventListener("hashchange", onChange);
+    return () => window.removeEventListener("hashchange", onChange);
+  }, []);
+  return hash;
+}
+
+// رسائل موحّدة
+const NET_ERR = "تعذّر الاتصال، يرجى المحاولة مرة أخرى.";
+
+// =====================================================================
+// مكونات عامة
+// =====================================================================
+// حقل نموذج موحّد: تسمية + علامة الإلزامي + تلميح اختياري
+function Field({ label, required, hint, full, children }) {
+  return (
+    <label className={`field${full ? " full" : ""}`}>
+      <span className="field-label">{label}{required && <b className="req">*</b>}</span>
+      {children}
+      {hint && <small className="hint">{hint}</small>}
+    </label>
+  );
+}
+
+// رسالة تنبيه، مؤشر تحميل، وشارة حالة بلونها
+const Alert = ({ type, children }) => <div className={`alert ${type}`}>{children}</div>;
+const Loading = () => <div className="spinner" aria-label="جارٍ التحميل" />;
+const StatusBadge = ({ value }) => <span className={`badge ${stClass(value)}`}>{value}</span>;
+
+// الشريط العلوي: الشعار، اسم الصفحة، وزر خروج اختياري
+function Header({ label, onLogout }) {
+  return (
+    <header className="topbar">
+      <div className="topbar-inner">
+        <a className="brand" href="#"><span className="brand-mark">🕋</span>شكاوى لجنة الحج{label && <small>· {label}</small>}</a>
+        {onLogout && <button className="btn ghost" onClick={onLogout}>خروج</button>}
+      </div>
+    </header>
+  );
+}
+
+// رسالة تظهر عند عدم ضبط بيانات Supabase في config.js
+function SetupNotice() {
+  return (
+    <div className="card">
+      <h2>إعداد الاتصال بقاعدة البيانات</h2>
+      <p>ضع <code>SUPABASE_URL</code> و<code>SUPABASE_ANON_KEY</code> في الملف <code>config.js</code> ثم أعد تحميل الصفحة.</p>
+    </div>
+  );
+}
+
+// صفحة دخول موحّدة (كلمة مرور المشتكي، الأدمن، الإدارة): verify(value) تُرجع رسالة خطأ أو null
+function GatePage({ title, sub, label, placeholder, numeric, maxLength, secret, initialError, verify, onPass, footer }) {
+  // المدخل، حالة التحقق، وإظهار كلمة المرور المخفية
+  const [value, setValue] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(initialError || "");
+  const [show, setShow] = useState(false);
+
+  // تنظيف المدخل: الأرقام فقط (مع تحويل ٠-٩) عند طلب ذلك
+  function onChange(e) {
+    let v = e.target.value;
+    if (numeric) v = v.replace(/[٠-٩]/g, d => "٠١٢٣٤٥٦٧٨٩".indexOf(d)).replace(/\D/g, "");
+    setValue(maxLength ? v.slice(0, maxLength) : v);
+  }
+
+  // التحقق عبر الدالة الممرَّرة
+  async function submit(e) {
+    e.preventDefault();
+    setError("");
+    if (!value.trim()) return setError(`يرجى إدخال ${label}.`);
+    setBusy(true);
+    const err = await verify(value.trim());
+    setBusy(false);
+    if (err) setError(err); else onPass(value.trim());
+  }
+
+  // العرض: الشعار، العنوان، الخانة (في المنتصف، ومعها زر إظهار للمخفية)، وزر الدخول
+  return (
+    <div className="narrow">
+      <div className="hero">
+        <div className="brand-mark">🕋</div>
+        <h1>{title}</h1>
+        {sub && <p>{sub}</p>}
+      </div>
+      <form className="card" onSubmit={submit} noValidate>
+        {error && <Alert type="error">{error}</Alert>}
+        <Field label={label}>
+          <div className="pw-wrap">
+            <input className={secret ? "secret-input" : "code-input"} type={secret && !show ? "password" : "text"} value={value} onChange={onChange}
+              inputMode={numeric ? "numeric" : undefined} autoComplete={secret ? "current-password" : "off"}
+              autoCapitalize="off" spellCheck={false} placeholder={placeholder} dir="ltr" />
+            {secret && (
+              <button type="button" className="pw-toggle" onClick={() => setShow(s => !s)}
+                aria-label={show ? "إخفاء كلمة المرور" : "إظهار كلمة المرور"}>{show ? "🙈" : "👁"}</button>
+            )}
+          </div>
+        </Field>
+        <button className="btn block" style={{ marginTop: 16 }} disabled={busy}>{busy ? "جارٍ التحقق…" : "دخول"}</button>
+      </form>
+      {footer}
+    </div>
+  );
+}
+
+// رابط «معرفة نتيجة شكوى سابقة» أسفل صفحات المشتكي
+const ResultLink = () => <div className="below-link"><a href="#/result">🔎 معرفة نتيجة شكوى سابقة</a></div>;
+
+// =====================================================================
+// الصفحة 1: المشتكي
+// =====================================================================
+// الصفحة الأولى دائماً خانة كلمة المرور (عامة أو خاصة حسب الإعداد)، وتحتها زر
+// «تقديم شكوى مباشرة» إن فعّله الأدمن؛ ثم النموذج، ثم رسالة النجاح
+function ComplainantPage() {
+  // الإعدادات (النوع + زر المباشر)، كلمة المرور المقبولة ("" = مباشر)، خطأ للعودة، والنتيجة
+  const [config, setConfig] = useState(null);
+  const [loadError, setLoadError] = useState("");
+  const [code, setCode] = useState(null);
+  const [gateError, setGateError] = useState("");
+  const [done, setDone] = useState(null);
+
+  // جلب إعدادات صفحة المشتكي من قاعدة البيانات
+  useEffect(() => {
+    sb.rpc("get_access_config").then(({ data, error }) => {
+      if (error || !data || !data.length) setLoadError(NET_ERR); else setConfig(data[0]);
+    });
+  }, []);
+
+  // التحقق من كلمة المرور (عامة أو خاصة) عبر check_access_code
+  const isPrivate = config && config.mode === "private";
+  async function verify(value) {
+    if (isPrivate && value.length !== 4) return "كلمة المرور مكوّنة من 4 أرقام.";
+    const { data, error } = await sb.rpc("check_access_code", { p_code: value });
+    if (error) return NET_ERR;
+    return data === "ok" ? null : isPrivate ? "كلمة المرور غير صحيحة أو سبق استخدامها." : "كلمة المرور غير صحيحة.";
+  }
+
+  // اختيار ما يُعرض
+  if (loadError) return <div className="narrow"><Alert type="error">{loadError}</Alert></div>;
+  if (!config) return <Loading />;
+  if (done) return <SuccessMessage number={done.complaint_number} code={done.tracking_code} />;
+  if (code !== null) return (
+    <ComplaintForm code={code} onDone={r => { rememberMine(r.complaint_number, r.tracking_code); setDone(r); }}
+      onRejected={msg => { setCode(null); setGateError(msg); }} />
+  );
+  return (
+    <GatePage key={gateError} title="منصة شكاوى لجنة الحج" sub="أدخل كلمة المرور التي وصلتك لتقديم شكواك"
+      label="كلمة المرور" placeholder={isPrivate ? "••••" : ""} numeric={isPrivate} maxLength={isPrivate ? 4 : 30}
+      initialError={gateError} verify={verify} onPass={v => { setGateError(""); setCode(v); }}
+      footer={
+        <>
+          {config.direct && (
+            <div className="card center" style={{ marginTop: 14 }}>
+              <p className="muted" style={{ margin: "0 0 10px" }}>ليس لديك كلمة مرور؟</p>
+              <button className="btn gold block" onClick={() => { setGateError(""); setCode(""); }}>📝 تقديم شكوى مباشرة</button>
+            </div>
+          )}
+          <ResultLink />
+        </>
+      } />
+  );
+}
+
+// نموذج الشكوى: الاسم، رقم التواصل، اسم المشتكى عليه، نص الاعتراض (الرقم والرمز والتاريخ تلقائية)
+function ComplaintForm({ code, onDone, onRejected }) {
+  // بيانات النموذج وحالة الإرسال
+  const [form, setForm] = useState({ name: "", contact: "", accused: "", subject: "" });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const set = key => e => setForm(f => ({ ...f, [key]: e.target.value }));
+
+  // الإرسال عبر submit_complaint؛ تُرجع رقم الشكوى ورمز المتابعة
+  async function submit(e) {
+    e.preventDefault();
+    setError("");
+    if (!form.name.trim() || !form.contact.trim() || !form.accused.trim() || !form.subject.trim()) return setError("يرجى تعبئة جميع الحقول.");
+    if (!/^\+?[0-9٠-٩\s-]{7,20}$/.test(form.contact.trim())) return setError("رقم التواصل غير صالح. اكتب الأرقام فقط، مع رمز الدولة إن وُجد.");
+    setBusy(true);
+    const { data, error: rpcErr } = await sb.rpc("submit_complaint", {
+      p_code: code, p_complainant_name: form.name, p_contact_number: form.contact, p_accused_name: form.accused, p_subject: form.subject,
+    });
+    setBusy(false);
+    if (rpcErr && rpcErr.message.includes("INVALID_CODE"))
+      return onRejected(code ? "كلمة المرور لم تعد صالحة. اطلب كلمة مرور جديدة." : "التقديم المباشر غير متاح حالياً. أدخل كلمة المرور.");
+    if (rpcErr || !data || !data.length) return setError("تعذّر إرسال الشكوى، يرجى المحاولة مرة أخرى.");
+    onDone(data[0]);
+  }
+
+  // العرض: الحقول الثلاثة وزر الإرسال، ورابط معرفة النتيجة
+  return (
+    <div className="narrow">
+      <div className="page-head">
+        <h1>تقديم شكوى</h1>
+        <p>نستقبل شكواكم ونتابعها بكل اهتمام وسرية</p>
+      </div>
+      <form className="card" onSubmit={submit} noValidate>
+        {error && <Alert type="error">{error}</Alert>}
+        <div className="grid" style={{ gridTemplateColumns: "1fr" }}>
+          <Field label="اسمك" required><input type="text" value={form.name} onChange={set("name")} maxLength={200} autoComplete="name" /></Field>
+          <Field label="رقم التواصل" required hint="مثال: 963912345678+"><input type="tel" dir="ltr" value={form.contact} onChange={set("contact")} maxLength={20} autoComplete="tel" /></Field>
+          <Field label="اسم المشتكى عليه" required><input type="text" value={form.accused} onChange={set("accused")} maxLength={200} /></Field>
+          <Field label="نص الاعتراض" required><textarea value={form.subject} onChange={set("subject")} maxLength={5000} placeholder="اشرح تفاصيل الشكوى: ماذا حدث، ومتى، وأين…" style={{ minHeight: 150 }} /></Field>
+        </div>
+        <button className="btn block" style={{ marginTop: 18 }} disabled={busy}>{busy ? "جارٍ الإرسال…" : "إرسال الشكوى"}</button>
+      </form>
+      <ResultLink />
+    </div>
+  );
+}
+
+// رسالة النجاح مع رقم الشكوى ورمز المتابعة (للاطلاع على النتيجة لاحقاً)
+function SuccessMessage({ number, code }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <div className="narrow">
+      <div className="card done">
+        <div className="icon">✅</div>
+        <h2>تم تسجيل الشكوى بنجاح</h2>
+        <p className="muted" style={{ margin: 0 }}>احتفظ بالرقم والرمز لمعرفة نتيجة شكواك</p>
+        <div className="ticket">
+          <div><small>رقم الشكوى</small><b>{number}</b></div>
+          <div><small>رمز المتابعة</small><b>{code}</b></div>
+        </div>
+        <p className="muted" style={{ fontSize: 13.5 }}>حُفظت الشكوى على هذا الجهاز، ويمكنك معرفة نتيجتها من صفحة «نتيجة الشكوى».</p>
+        <div className="grid" style={{ gridTemplateColumns: "1fr 1fr", marginTop: 10 }}>
+          <button className="btn secondary" onClick={async () => setCopied(await copyText(`رقم الشكوى: ${number}\nرمز المتابعة: ${code}\n${siteUrl()}#/result`))}>{copied ? "✓ تم النسخ" : "📋 نسخ"}</button>
+          <a className="btn" href="#/result">🔎 نتيجة الشكوى</a>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// =====================================================================
+// الصفحة 2: نتيجة الشكوى (‎#/result)
+// =====================================================================
+// الشكاوى المحفوظة على الجهاز تلقائياً، أو البحث بالرقم + رمز المتابعة
+function ResultPage() {
+  // نتائج شكاوى الجهاز، ومدخلات البحث ونتيجته
+  const [mine, setMine] = useState(null);
+  const [number, setNumber] = useState("");
+  const [code, setCode] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [found, setFound] = useState(null);
+
+  // عند الفتح: جلب نتيجة كل شكوى محفوظة على هذا الجهاز
+  useEffect(() => {
+    const saved = myComplaints();
+    if (!saved.length) { setMine([]); return; }
+    Promise.all(saved.map(s => sb.rpc("track_complaint", { p_number: s.number, p_code: s.code })))
+      .then(res => setMine(res.flatMap(r => r.data || [])));
+  }, []);
+
+  // البحث اليدوي عبر track_complaint
+  async function search(e) {
+    e.preventDefault();
+    setError(""); setFound(null);
+    if (!number.trim() || !code.trim()) return setError("يرجى إدخال رقم الشكوى ورمز المتابعة.");
+    setBusy(true);
+    const { data, error: rpcErr } = await sb.rpc("track_complaint", { p_number: number.trim(), p_code: code.trim() });
+    setBusy(false);
+    if (rpcErr) return setError(NET_ERR);
+    if (!data || !data.length) return setError("لم نعثر على شكوى بهذا الرقم والرمز. تأكد منهما.");
+    rememberMine(data[0].complaint_number, code.trim());
+    setFound(data[0]);
+  }
+
+  // العرض: شكاوى الجهاز، ثم نموذج البحث ونتيجته
+  return (
+    <div className="narrow">
+      <div className="page-head">
+        <h1>نتيجة الشكوى</h1>
+        <p>تظهر هنا تلقائياً الشكاوى المقدّمة من هذا الجهاز</p>
+      </div>
+      {mine === null ? <Loading /> : mine.map(r => <ResultCard key={r.complaint_number} r={r} />)}
+      <form className="card" onSubmit={search} noValidate style={{ marginTop: 14 }}>
+        <h2>البحث برقم الشكوى</h2>
+        {error && <Alert type="error">{error}</Alert>}
+        <div className="grid">
+          <Field label="رقم الشكوى" hint="مثال: HJ-2026-00001"><input type="text" dir="ltr" value={number} onChange={e => setNumber(e.target.value)} maxLength={30} /></Field>
+          <Field label="رمز المتابعة" hint="6 أرقام"><input type="text" inputMode="numeric" dir="ltr" value={code} onChange={e => setCode(e.target.value)} maxLength={6} /></Field>
+        </div>
+        <button className="btn block" style={{ marginTop: 14 }} disabled={busy}>{busy ? "جارٍ البحث…" : "عرض النتيجة"}</button>
+      </form>
+      {found && <ResultCard r={found} />}
+      <div className="below-link"><a href="#">← تقديم شكوى جديدة</a></div>
+    </div>
+  );
+}
+
+// بطاقة نتيجة شكوى: الرقم، التاريخ، الحالة، النتيجة، وتاريخ الإغلاق
+function ResultCard({ r }) {
+  return (
+    <div className={`card status-card ${stClass(r.status)}`} style={{ marginTop: 14 }}>
+      <div className="c-head">
+        <div>
+          <div className="c-no">{r.complaint_number}</div>
+          <div className="meta"><span>📅 {fmtDate(r.received_date)}</span></div>
+        </div>
+        <StatusBadge value={r.status} />
+      </div>
+      <div className="field-label">النتيجة</div>
+      <div className="subject" style={{ marginBottom: 6 }}>{r.result || "لم تصدر النتيجة بعد، ستتابع اللجنة شكواك."}</div>
+      {r.closed_date && <div className="muted">تاريخ الإغلاق: {fmtDate(r.closed_date)}</div>}
+    </div>
+  );
+}
+
+// =====================================================================
+// الصفحة 3: الأدمن (‎#/admin)
+// =====================================================================
+// ---------------------------------------------------------------------
+// التنبيهات الذكية: قواعد تُطبَّق تلقائياً على كل شكوى غير مغلقة (المدد من config.js)
+// ---------------------------------------------------------------------
+const RULES = { PENDING_HOURS: 24, PENDING_URGENT_HOURS: 72, REFERRED_DAYS: 2, IDLE_DAYS: 3, LATE_DAYS: 7, ...(cfg.ALERT_RULES || {}) };
+const HOUR = 36e5, DAY = 864e5;
+
+// مدة مقروءة بالعربية: «ساعتين»، «3 أيام»، «12 يوماً»
+function ago(ms) {
+  const h = Math.floor(ms / HOUR);
+  if (h < 24) return h <= 1 ? "ساعة" : h === 2 ? "ساعتين" : h <= 10 ? `${h} ساعات` : `${h} ساعة`;
+  const d = Math.floor(ms / DAY);
+  return d === 1 ? "يوم" : d === 2 ? "يومين" : d <= 10 ? `${d} أيام` : `${d} يوماً`;
+}
+
+// تنبيهات شكوى واحدة كما تكون في وقت مرجعي ref (الآن افتراضياً، أو يوم يختاره الأدمن)
+// تُرجع قائمة {level: danger/warn/info/later, text}
+function smartAlerts(c, ref = new Date()) {
+  if (c.status === CLOSED) return [];
+  const now = ref.getTime();
+  const age = now - new Date(c.received_date);                     // عمر الشكوى
+  const idle = now - new Date(c.updated_at || c.received_date);   // منذ آخر تعديل
+  const out = [];
+
+  // بداية ونهاية اليوم المرجعي، وهل هو اليوم الحالي (لصياغة النص)
+  const sod = new Date(ref); sod.setHours(0, 0, 0, 0);
+  const eod = new Date(sod); eod.setDate(eod.getDate() + 1);
+  const isToday = sod.getTime() === new Date().setHours(0, 0, 0, 0);
+
+  // التنبيه اليدوي: فات موعده ← أحمر، في اليوم المرجعي ← برتقالي، بعده ← مجدول
+  if (c.reminder_at) {
+    const at = new Date(c.reminder_at);
+    const note = c.reminder_note ? ` — ${c.reminder_note}` : "";
+    const time = at.toLocaleTimeString("ar-u-nu-latn", { timeStyle: "short" });
+    if (at < sod) out.push({ level: "danger", text: `فات موعد المتابعة (${fmtDateTime(at)})${note}` });
+    else if (at < eod) out.push({ level: "warn", text: `${isToday ? "متابعة اليوم" : "متابعة في هذا اليوم"} الساعة ${time}${note}` });
+    else out.push({ level: "later", text: `متابعة مجدولة: ${fmtDateTime(at)}${note}` });
+  }
+
+  // مضى عليها وقت طويل دون إغلاق
+  if (age >= RULES.LATE_DAYS * DAY) out.push({ level: "danger", text: `مضى ${ago(age)} على الشكوى دون إغلاق` });
+
+  // «جديد» لم تُراجع
+  if (c.status === "جديد" && age >= RULES.PENDING_HOURS * HOUR)
+    out.push({ level: age >= RULES.PENDING_URGENT_HOURS * HOUR ? "danger" : "warn", text: `جديدة ولم تُراجع منذ ${ago(age)}` });
+
+  // مُحالة لجهة ولا تحديث ← متابعة الجهة؛ أو قيد العمل بلا تحديث ← تذكير
+  if (c.referred_to && idle >= RULES.REFERRED_DAYS * DAY)
+    out.push({ level: "warn", text: `مُحالة إلى «${c.referred_to}» ولا تحديث منذ ${ago(idle)} — تابع مع الجهة` });
+  else if (c.status !== "جديد" && idle >= RULES.IDLE_DAYS * DAY)
+    out.push({ level: "info", text: `لا تحديث منذ ${ago(idle)}` });
+
+  return out;
+}
+
+// التنبيهات المطلوبة في وقت مرجعي (كل شيء عدا المجدول لما بعده)
+const dueAlerts = (c, ref) => smartAlerts(c, ref).filter(a => a.level !== "later");
+
+// أولوية الشكوى للترتيب: أحمر ← برتقالي ← أزرق ← مجدول
+const alertWeight = alerts =>
+  alerts.some(a => a.level === "danger") ? 0 : alerts.some(a => a.level === "warn") ? 1 : alerts.some(a => a.level === "info") ? 2 : 3;
+
+// التبويبات بعد الدخول: «المطلوب» أولاً، ثم الشكاوى، دخول المشتكين، وكلمات مرور الإدارة
+function AdminPage({ secret }) {
+  // التبويب الحالي، الشكاوى (تُجلب مرة واحدة لكل التبويبات)، والشكوى المفتوحة في نافذة التفاصيل
+  const [tab, setTab] = useState("today");
+  const [rows, setRows] = useState(null);
+  const [error, setError] = useState("");
+  const [openId, setOpenId] = useState(null);
+
+  // جلب كل الشكاوى
+  const load = useCallback(async () => {
+    setError("");
+    const { data, error } = await sb.rpc("admin_list_complaints", { p_secret: secret });
+    if (error) return setError(NET_ERR);
+    setRows(data || []);
+  }, [secret]);
+  useEffect(() => { load(); }, [load]);
+
+  // تحديث شكوى أو أكثر في القائمة بعد حفظها، وإعادة الجلب
+  const onSaved = updated => {
+    const list = Array.isArray(updated) ? updated : [updated];
+    setRows(rs => rs.map(r => list.find(u => u.id === r.id) || r));
+  };
+  const reload = () => { setRows(null); load(); };
+  const opened = (rows || []).find(r => r.id === openId);
+
+  // عدد الشكاوى المطلوبة اليوم لإظهاره على التبويب
+  const dueCount = (rows || []).filter(c => dueAlerts(c).length > 0).length;
+
+  // العرض: التبويبات، محتوى التبويب، ونافذة التفاصيل عند فتح شكوى
+  return (
+    <div>
+      <div className="tabs">
+        <button className={tab === "today" ? "active" : ""} onClick={() => setTab("today")}>
+          📅 المطلوب{dueCount > 0 && <span className="tab-count">{dueCount}</span>}
+        </button>
+        <button className={tab === "complaints" ? "active" : ""} onClick={() => setTab("complaints")}>📋 الشكاوى</button>
+        <button className={tab === "access" ? "active" : ""} onClick={() => setTab("access")}>🔐 دخول المشتكين</button>
+        <button className={tab === "viewers" ? "active" : ""} onClick={() => setTab("viewers")}>📊 كلمات مرور الإدارة</button>
+      </div>
+      {error && <Alert type="error">{error}</Alert>}
+      {tab === "today" && <AdminDue secret={secret} rows={rows} onSaved={onSaved} reload={reload} onOpen={c => setOpenId(c.id)} />}
+      {tab === "complaints" && <AdminComplaints secret={secret} rows={rows} onSaved={onSaved} reload={reload} onOpen={c => setOpenId(c.id)} />}
+      {tab === "access" && <AdminAccess secret={secret} />}
+      {tab === "viewers" && <AdminViewers secret={secret} />}
+      {opened && (
+        <div className="modal-back" onClick={() => setOpenId(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <div className="modal-close"><button className="btn secondary sm" onClick={() => setOpenId(null)}>✕ إغلاق</button></div>
+            <ComplaintCard key={opened.id} secret={secret} complaint={opened} onSaved={onSaved} />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// جدول الشكاوى (مثل Excel): فرز بالعناوين، عدد الأسطر، إظهار/إخفاء الأعمدة، حجم الخط،
+// اختيار عدة صفوف وتغييرها معاً، وفتح صف للتعديل الفردي
+// ---------------------------------------------------------------------
+// تعريف الأعمدة: المفتاح، العنوان، قيمة الفرز، النص (للتصدير)، والعرض داخل الخلية
+const muted = v => v || <span className="muted">—</span>;
+const COLUMNS = [
+  { key: "number", label: "رقم الشكوى", sort: c => c.complaint_number, text: c => c.complaint_number, cell: c => <b dir="ltr">{c.complaint_number}</b> },
+  { key: "date", label: "التاريخ", sort: c => new Date(c.received_date).getTime(), text: c => fmtDate(c.received_date), cell: c => fmtDate(c.received_date) },
+  { key: "name", label: "المشتكي", sort: c => c.complainant_name, text: c => c.complainant_name, cell: c => c.complainant_name },
+  { key: "contact", label: "رقم التواصل", sort: c => c.contact_number, text: c => c.contact_number, cell: c => <span dir="ltr">{c.contact_number || "—"}</span> },
+  { key: "accused", label: "المشتكى عليه", sort: c => c.accused_name, text: c => c.accused_name, cell: c => muted(c.accused_name) },
+  { key: "subject", label: "الموضوع", sort: c => c.subject, text: c => c.subject, wrap: true, cell: c => <span className="clip">{c.subject}</span> },
+  { key: "class", label: "التصنيف", sort: c => c.classification, text: c => c.classification, cell: c => muted(c.classification) },
+  { key: "referred", label: "مُحالة إلى", sort: c => c.referred_to, text: c => c.referred_to, cell: c => muted(c.referred_to) },
+  { key: "status", label: "الحالة", sort: c => STATUSES.indexOf(c.status), text: c => c.status, cell: c => <StatusBadge value={c.status} /> },
+  { key: "result", label: "النتيجة", sort: c => c.result, text: c => c.result, wrap: true, cell: c => c.result ? <span className="clip">{c.result}</span> : muted() },
+  { key: "closed", label: "تاريخ الإغلاق", sort: c => c.closed_date ? new Date(c.closed_date).getTime() : null, text: c => c.closed_date ? fmtDate(c.closed_date) : "", cell: c => c.closed_date ? fmtDate(c.closed_date) : muted() },
+  { key: "tracking", label: "رمز المتابعة", sort: c => c.tracking_code, text: c => c.tracking_code, cell: c => <span dir="ltr">{c.tracking_code || "—"}</span> },
+];
+// الأعمدة المخفية افتراضياً (يمكن إظهارها من قائمة الأعمدة)
+const DEFAULT_HIDDEN = ["result", "tracking"];
+
+// تفضيلات الجدول المحفوظة على الجهاز: الأعمدة المخفية، حجم الخط، عدد الأسطر
+function usePref(key, initial) {
+  const [value, setValue] = useState(() => { try { const v = JSON.parse(storeGet(localStorage, key)); return v ?? initial; } catch { return initial; } });
+  const save = v => { setValue(v); storeSet(localStorage, key, JSON.stringify(v)); };
+  return [value, save];
+}
+
+function ComplaintsTable({ secret, rows, onSaved, onOpen, alertsFor }) {
+  // التفضيلات: الأعمدة المخفية، حجم الخط، عدد الأسطر
+  const [hidden, setHidden] = usePref("hajj_cols_hidden", DEFAULT_HIDDEN);
+  const [fontSize, setFontSize] = usePref("hajj_font_size", 14);
+  const [pageSize, setPageSize] = usePref("hajj_page_size", 50);
+
+  // الفرز (العمود والاتجاه)، الصفحة الحالية، قائمة الأعمدة، الاختيار، والتغيير الجماعي
+  const [sort, setSort] = useState({ key: null, dir: 1 });
+  const [page, setPage] = useState(0);
+  const [colsOpen, setColsOpen] = useState(false);
+  const [selected, setSelected] = useState(() => new Set());
+  const [bulk, setBulk] = useState({ status: "", classification: "", referred_to: "", closed: "" });
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+
+  // الأعمدة الظاهرة
+  const cols = COLUMNS.filter(c => !hidden.includes(c.key));
+
+  // الفرز: القيم الفارغة دائماً في الأسفل؛ النصوص بالترتيب العربي
+  const sorted = (() => {
+    const col = COLUMNS.find(c => c.key === sort.key);
+    if (!col) return rows;
+    return [...rows].sort((a, b) => {
+      const x = col.sort(a), y = col.sort(b);
+      if (x == null || x === "") return 1;
+      if (y == null || y === "") return -1;
+      const r = typeof x === "number" ? x - y : String(x).localeCompare(String(y), "ar");
+      return r * sort.dir;
+    });
+  })();
+
+  // التقسيم إلى صفحات؛ العودة لآخر صفحة موجودة إن قلّت الصفوف
+  const pages = Math.max(1, Math.ceil(sorted.length / pageSize));
+  const cur = Math.min(page, pages - 1);
+  const pageRows = sorted.slice(cur * pageSize, (cur + 1) * pageSize);
+
+  // الضغط على عنوان: فرز تصاعدي، ثم تنازلي، ثم بلا فرز
+  function onSort(key) {
+    setSort(s => s.key !== key ? { key, dir: 1 } : s.dir === 1 ? { key, dir: -1 } : { key: null, dir: 1 });
+    setPage(0);
+  }
+  const arrow = key => sort.key !== key ? <span className="sort-arrow off">⇅</span> : <span className="sort-arrow">{sort.dir === 1 ? "▲" : "▼"}</span>;
+
+  // الاختيار: صف واحد، أو كل صفوف الصفحة الحالية
+  const pageIds = pageRows.map(r => r.id);
+  const chosen = rows.filter(r => selected.has(r.id)).map(r => r.id);
+  const pageAllOn = pageIds.length > 0 && pageIds.every(id => selected.has(id));
+  const toggle = id => setSelected(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const togglePage = () => setSelected(s => { const n = new Set(s); pageIds.forEach(id => pageAllOn ? n.delete(id) : n.add(id)); return n; });
+
+  // إظهار/إخفاء عمود
+  const toggleCol = key => setHidden(hidden.includes(key) ? hidden.filter(k => k !== key) : [...hidden, key]);
+
+  // تطبيق التغيير الجماعي عبر admin_bulk_update (الحقل الفارغ يبقى كما هو)
+  async function applyBulk() {
+    if (!bulk.status && !bulk.classification && !bulk.referred_to.trim() && !bulk.closed)
+      return setMsg({ type: "error", text: "اختر تغييراً واحداً على الأقل." });
+    setBusy(true); setMsg(null);
+    const status = bulk.closed ? CLOSED : (bulk.status || null);
+    const { data, error } = await sb.rpc("admin_bulk_update", {
+      p_secret: secret, p_ids: chosen, p_status: status,
+      p_classification: bulk.classification || null, p_referred_to: bulk.referred_to.trim() || null,
+      p_closed_date: status === CLOSED ? dateInputToIso(bulk.closed || toDateInput(new Date())) : null,
+    });
+    setBusy(false);
+    if (error || !data) return setMsg({ type: "error", text: "تعذّر التطبيق، يرجى المحاولة مرة أخرى." });
+    onSaved(data);
+    setMsg({ type: "ok", text: `تم تطبيق التغيير على ${data.length} شكوى.` });
+    setSelected(new Set());
+    setBulk({ status: "", classification: "", referred_to: "", closed: "" });
+  }
+
+  // تصدير كل الصفوف (بالترتيب الحالي والأعمدة الظاهرة) إلى ملف يفتحه Excel (CSV بترميز UTF-8)
+  function exportExcel() {
+    const cell = v => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    const lines = [cols.map(c => c.label), ...sorted.map(r => cols.map(c => c.text(r)))].map(r => r.map(cell).join(","));
+    const blob = new Blob(["﻿" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `الشكاوى-${toDateInput(new Date())}.csv`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  }
+
+  // العرض: شريط التغيير الجماعي (عند الاختيار)، شريط الأدوات، الجدول، ثم التنقل بين الصفحات
+  return (
+    <div>
+      {msg && <Alert type={msg.type}>{msg.text}</Alert>}
+      {chosen.length > 0 && (
+        <div className="bulk-bar">
+          <b>✔ {chosen.length} محددة — تغيير إلى:</b>
+          <select value={bulk.status} onChange={e => setBulk(b => ({ ...b, status: e.target.value, closed: e.target.value === CLOSED ? (b.closed || toDateInput(new Date())) : "" }))}>
+            <option value="">الحالة (بلا تغيير)</option>
+            {STATUSES.map(s => <option key={s}>{s}</option>)}
+          </select>
+          <select value={bulk.classification} onChange={e => setBulk(b => ({ ...b, classification: e.target.value }))}>
+            <option value="">التصنيف (بلا تغيير)</option>
+            {CLASSIFICATIONS.map(s => <option key={s}>{s}</option>)}
+          </select>
+          <input type="text" placeholder="ترحيل / مُحالة إلى" value={bulk.referred_to} onChange={e => setBulk(b => ({ ...b, referred_to: e.target.value }))} />
+          <input type="date" title="تاريخ الإغلاق" value={bulk.closed} onChange={e => setBulk(b => ({ ...b, closed: e.target.value, status: e.target.value ? CLOSED : b.status }))} />
+          <button className="btn gold" disabled={busy} onClick={applyBulk}>{busy ? "جارٍ التطبيق…" : `تطبيق على ${chosen.length}`}</button>
+          <button className="btn secondary" onClick={() => setSelected(new Set())}>إلغاء التحديد</button>
+        </div>
+      )}
+
+      <div className="table-tools">
+        <label className="tool">عدد الأسطر
+          <select value={pageSize} onChange={e => { setPageSize(Number(e.target.value)); setPage(0); }}>
+            {[10, 50, 100].map(n => <option key={n} value={n}>{n}</option>)}
+          </select>
+        </label>
+        <div className="tool cols-menu">
+          <button className="btn secondary sm" onClick={() => setColsOpen(o => !o)} aria-expanded={colsOpen}>⚙ الأعمدة ({cols.length}/{COLUMNS.length})</button>
+          {colsOpen && (
+            <>
+              <div className="menu-back" onClick={() => setColsOpen(false)} />
+              <div className="menu">
+                {COLUMNS.map(c => (
+                  <label key={c.key}><input type="checkbox" checked={!hidden.includes(c.key)} onChange={() => toggleCol(c.key)} /> {c.label}</label>
+                ))}
+                <button className="btn secondary sm block" style={{ marginTop: 6 }} onClick={() => setHidden(DEFAULT_HIDDEN)}>الافتراضي</button>
+              </div>
+            </>
+          )}
+        </div>
+        <div className="tool font-tools" title="حجم الخط">
+          <button className="btn secondary sm" onClick={() => setFontSize(Math.max(11, fontSize - 1))} aria-label="تصغير الخط">A−</button>
+          <button className="btn secondary sm" onClick={() => setFontSize(14)} aria-label="الحجم الافتراضي">{fontSize}</button>
+          <button className="btn secondary sm" onClick={() => setFontSize(Math.min(22, fontSize + 1))} aria-label="تكبير الخط">A+</button>
+        </div>
+        {rows.length > 0 && <button className="btn secondary sm tool-end" onClick={exportExcel}>⬇ تصدير Excel</button>}
+      </div>
+
+      <div className="card" style={{ padding: 0 }}>
+        {rows.length === 0 ? <div className="empty">لا توجد شكاوى</div> : (
+          <div className="table-wrap">
+            <table className="sheet" style={{ fontSize }}>
+              <thead>
+                <tr>
+                  <th className="chk"><input type="checkbox" checked={pageAllOn} onChange={togglePage} title="تحديد كل صفوف الصفحة" /></th>
+                  {alertsFor && <th>التنبيه</th>}
+                  {cols.map(c => <th key={c.key} className="sortable" onClick={() => onSort(c.key)}>{c.label} {arrow(c.key)}</th>)}
+                </tr>
+              </thead>
+              <tbody>
+                {pageRows.map(r => (
+                  <tr key={r.id} className={`status-row ${stClass(r.status)} ${selected.has(r.id) ? "selected" : ""}`} onClick={() => onOpen(r)}>
+                    <td className="chk" onClick={e => e.stopPropagation()}><input type="checkbox" checked={selected.has(r.id)} onChange={() => toggle(r.id)} /></td>
+                    {alertsFor && <td className="wrap">{alertsFor(r).map((a, i) => <span key={i} className={`alert-tag ${a.level}`}>{a.text}</span>)}</td>}
+                    {cols.map(c => <td key={c.key} className={c.wrap ? "wrap" : ""}>{c.cell(r)}</td>)}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {rows.length > 0 && (
+        <div className="pager">
+          <span className="muted">عرض {cur * pageSize + 1}–{Math.min((cur + 1) * pageSize, sorted.length)} من {sorted.length}</span>
+          <div className="row" style={{ gap: 6 }}>
+            <button className="btn secondary sm" disabled={cur === 0} onClick={() => setPage(cur - 1)}>→ السابق</button>
+            <span className="muted">صفحة {cur + 1} من {pages}</span>
+            <button className="btn secondary sm" disabled={cur >= pages - 1} onClick={() => setPage(cur + 1)}>التالي ←</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// تبويب «المطلوب»: اختيار الفترة (اليوم / الكل / تاريخ محدد) ثم جدول المطلوب فيها، الأهم أولاً
+function AdminDue({ secret, rows, onSaved, reload, onOpen }) {
+  // الفترة المختارة: today / all / date، والتاريخ المحدد (افتراضياً الغد)
+  const [mode, setMode] = useState("today");
+  const [day, setDay] = useState(() => { const d = new Date(); d.setDate(d.getDate() + 1); return toDateInput(d); });
+
+  // الوقت المرجعي: الآن لليوم والكل؛ وللتاريخ المحدد نهاية ذلك اليوم (أو الآن إن كان هو اليوم)
+  const todayStr = toDateInput(new Date());
+  const ref = mode === "date" && day && day !== todayStr ? new Date(`${day}T23:59:00`) : new Date();
+
+  // التنبيهات لكل شكوى حسب الفترة: «الكل» يشمل المتابعات المجدولة لاحقاً
+  const alertsFor = c => mode === "all" ? smartAlerts(c, ref) : dueAlerts(c, ref);
+
+  // الشكاوى المطلوبة مرتّبة: الأحمر ثم البرتقالي ثم الأزرق ثم المجدول، وداخل كل لون الأقدم أولاً
+  const due = (rows || [])
+    .map(c => ({ c, alerts: alertsFor(c) }))
+    .filter(x => x.alerts.length > 0)
+    .sort((a, b) => alertWeight(a.alerts) - alertWeight(b.alerts) || new Date(a.c.received_date) - new Date(b.c.received_date));
+  const counts = [0, 0, 0, 0];
+  due.forEach(x => counts[alertWeight(x.alerts)]++);
+
+  // عنوان الفترة المختارة
+  const fmtDay = d => d.toLocaleDateString("ar-u-nu-latn", { weekday: "long", day: "numeric", month: "long" });
+  const title = mode === "all" ? "كل المطلوب" : mode === "date" && day ? `المطلوب يوم ${fmtDay(new Date(`${day}T12:00:00`))}` : `مطلوب اليوم · ${fmtDay(new Date())}`;
+
+  // العرض: أزرار الفترة، العنوان والملخص، ثم الجدول
+  return (
+    <div>
+      <div className="card" style={{ padding: 14, marginBottom: 12 }}>
+        <div className="row">
+          <div className="chips" style={{ margin: 0 }}>
+            <button className={mode === "today" ? "active" : ""} onClick={() => setMode("today")}>اليوم</button>
+            <button className={mode === "all" ? "active" : ""} onClick={() => setMode("all")}>الكل</button>
+            <button className={mode === "date" ? "active" : ""} onClick={() => setMode("date")}>تاريخ محدد</button>
+          </div>
+          {mode === "date" && <input type="date" className="grow" value={day} onChange={e => setDay(e.target.value)} style={{ maxWidth: 200 }} />}
+          <button className="btn secondary sm" onClick={reload} style={{ marginInlineStart: "auto" }}>🔄 تحديث</button>
+        </div>
+      </div>
+      <div style={{ marginBottom: 10 }}><b style={{ fontSize: 18 }}>{title}</b></div>
+      {due.length > 0 && (
+        <div className="row" style={{ marginBottom: 12, gap: 8 }}>
+          {counts[0] > 0 && <span className="alert-chip danger">🔴 عاجل: {counts[0]}</span>}
+          {counts[1] > 0 && <span className="alert-chip warn">🟠 متابعة: {counts[1]}</span>}
+          {counts[2] > 0 && <span className="alert-chip info">🔵 تذكير: {counts[2]}</span>}
+          {counts[3] > 0 && <span className="alert-chip later">🗓️ مجدولة: {counts[3]}</span>}
+        </div>
+      )}
+      {rows === null ? <Loading /> : due.length === 0 ? (
+        <div className="card empty">✅ لا توجد أمور مطلوبة {mode === "all" ? "حالياً" : mode === "date" ? "في هذا اليوم" : "اليوم"} — كل الشكاوى في وضع جيد.</div>
+      ) : <ComplaintsTable secret={secret} rows={due.map(x => x.c)} onSaved={onSaved} onOpen={onOpen} alertsFor={alertsFor} />}
+    </div>
+  );
+}
+
+// تبويب الشكاوى: تصفية بالحالة وبحث، ثم جدول الشكاوى
+function AdminComplaints({ secret, rows, onSaved, reload, onOpen }) {
+  // التصفية والبحث
+  const [filter, setFilter] = useState("الكل");
+  const [search, setSearch] = useState("");
+
+  // التصفية بالحالة ونص البحث (الرقم، الأسماء، الموضوع، الرموز)
+  const term = search.trim();
+  const visible = (rows || []).filter(c =>
+    (filter === "الكل" || c.status === filter) &&
+    (!term || [c.complaint_number, c.complainant_name, c.contact_number, c.accused_name, c.subject, c.tracking_code, c.access_code, c.referred_to].some(v => (v || "").includes(term))));
+  const count = s => (rows || []).filter(c => s === "الكل" || c.status === s).length;
+
+  // العرض: أزرار التصفية مع الأعداد، البحث، ثم الجدول
+  return (
+    <div>
+      <div className="chips">
+        {["الكل", ...STATUSES].map(s => (
+          <button key={s} className={filter === s ? "active" : ""} onClick={() => setFilter(s)}>{s} ({count(s)})</button>
+        ))}
+      </div>
+      <div className="row" style={{ marginBottom: 12 }}>
+        <input className="grow" type="text" placeholder="بحث بالرقم أو الاسم أو الهاتف أو الموضوع أو الجهة…" value={search} onChange={e => setSearch(e.target.value)} />
+        <button className="btn secondary" onClick={reload}>🔄 تحديث</button>
+      </div>
+      {rows === null ? <Loading /> : <ComplaintsTable secret={secret} rows={visible} onSaved={onSaved} onOpen={onOpen} />}
+    </div>
+  );
+}
+
+// تفاصيل شكوى واحدة (في النافذة): البيانات + التصنيف، الترحيل، الحالة، النتيجة، الإغلاق، والتنبيه
+function ComplaintCard({ secret, complaint: c, onSaved }) {
+  // القيم القابلة للتعديل وحالة الحفظ
+  const [v, setV] = useState({
+    classification: c.classification || "",
+    referred_to: c.referred_to || "",
+    status: c.status,
+    result: c.result || "",
+    closed: c.closed_date ? toDateInput(new Date(c.closed_date)) : "",
+    reminder: toDateTimeInput(c.reminder_at),
+    reminder_note: c.reminder_note || "",
+  });
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const set = key => e => { setV(x => ({ ...x, [key]: e.target.value })); setMsg(null); };
+
+  // عند اختيار «مغلقة» يُملأ تاريخ الإغلاق بتاريخ اليوم إن كان فارغاً؛ وأي حالة أخرى تمسح التاريخ
+  function onStatus(e) {
+    const status = e.target.value;
+    setV(x => ({ ...x, status, closed: status === CLOSED ? (x.closed || toDateInput(new Date())) : "" }));
+    setMsg(null);
+  }
+
+  // اختيار تاريخ إغلاق يحوّل الحالة تلقائياً إلى «مغلقة»
+  function onClosedDate(e) {
+    const closed = e.target.value;
+    setV(x => ({ ...x, closed, status: closed ? CLOSED : x.status }));
+    setMsg(null);
+  }
+
+  // الحفظ عبر admin_update_complaint
+  async function save() {
+    setBusy(true); setMsg(null);
+    const { data, error } = await sb.rpc("admin_update_complaint", {
+      p_secret: secret, p_id: c.id, p_classification: v.classification, p_referred_to: v.referred_to,
+      p_status: v.status, p_result: v.result,
+      p_closed_date: v.status === CLOSED ? dateInputToIso(v.closed || toDateInput(new Date())) : null,
+      p_reminder_at: dateTimeInputToIso(v.reminder), p_reminder_note: v.reminder_note,
+    });
+    setBusy(false);
+    if (error || !data || !data.length) return setMsg({ type: "error", text: "تعذّر الحفظ، يرجى المحاولة مرة أخرى." });
+    onSaved(data[0]);
+    setMsg({ type: "ok", text: "تم الحفظ." });
+  }
+
+  // التنبيهات الذكية للشكوى كما هي محفوظة
+  const alerts = smartAlerts(c);
+
+  // العرض: الرأس، التنبيهات، البيانات، الموضوع، ثم حقول الإدارة وزر الحفظ
+  return (
+    <div className={`card status-card ${stClass(v.status)}`}>
+      <div className="c-head">
+        <div>
+          <div className="c-no">{c.complaint_number}</div>
+          <div className="meta">
+            <span>📅 {fmtDateTime(c.received_date)}</span>
+            <span>🔖 رمز المتابعة: <span dir="ltr">{c.tracking_code || "—"}</span></span>
+            {c.access_code && <span>🔑 <span dir="ltr">{c.access_code}</span></span>}
+          </div>
+        </div>
+        <StatusBadge value={c.status} />
+      </div>
+      {alerts.map((a, i) => <div key={i} className={`reminder-bar ${a.level}`}>{a.level === "later" ? "🗓️" : "⏰"} {a.text}</div>)}
+      <div className="meta" style={{ fontSize: 14.5, color: "var(--ink)" }}>
+        <span>👤 المشتكي: <b>{c.complainant_name}</b></span>
+        <span>📞 <b dir="ltr">{c.contact_number || "—"}</b></span>
+        <span>⚠️ المشتكى عليه: <b>{c.accused_name || "—"}</b></span>
+      </div>
+      <div className="subject">{c.subject}</div>
+      {msg && <Alert type={msg.type}>{msg.text}</Alert>}
+      <div className="grid">
+        <Field label="التصنيف">
+          <select value={v.classification} onChange={set("classification")}>
+            <option value="">— اختر —</option>
+            {CLASSIFICATIONS.map(x => <option key={x}>{x}</option>)}
+            {v.classification && !CLASSIFICATIONS.includes(v.classification) && <option>{v.classification}</option>}
+          </select>
+        </Field>
+        <Field label="ترحيل / مُحالة إلى"><input type="text" value={v.referred_to} onChange={set("referred_to")} maxLength={200} placeholder="الجهة أو الشخص" /></Field>
+        <Field label="الحالة">
+          <select value={v.status} onChange={onStatus}>{STATUSES.map(x => <option key={x}>{x}</option>)}</select>
+        </Field>
+        <Field label="تاريخ الإغلاق" hint="اختيار تاريخ يجعل الحالة «مغلقة»">
+          <input type="date" value={v.closed} onChange={onClosedDate} />
+        </Field>
+        <Field label="⏰ تنبيه يدوي (اختياري)" hint="يظهر في «المطلوب» في يومه">
+          <div className="row" style={{ flexWrap: "nowrap" }}>
+            <input type="datetime-local" value={v.reminder} onChange={set("reminder")} />
+            {v.reminder && <button type="button" className="btn danger-text" onClick={() => setV(x => ({ ...x, reminder: "", reminder_note: "" }))}>مسح</button>}
+          </div>
+        </Field>
+        <Field label="المطلوب عند التنبيه"><input type="text" value={v.reminder_note} onChange={set("reminder_note")} maxLength={500} placeholder="مثال: الاتصال بمسؤول السكن" /></Field>
+        <Field label="النتيجة (يراها المشتكي)" full><textarea style={{ minHeight: 80 }} value={v.result} onChange={set("result")} maxLength={2000} /></Field>
+      </div>
+      <button className="btn block" style={{ marginTop: 14 }} disabled={busy} onClick={save}>{busy ? "جارٍ الحفظ…" : "حفظ"}</button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// تبويب دخول المشتكين: نوع كلمة المرور (عامة / خاصة)، مفتاح زر التقديم المباشر، وإدارة كلمات المرور
+// ---------------------------------------------------------------------
+function AdminAccess({ secret }) {
+  // الإعدادات المحفوظة، النوع المختار، كلمة المرور العامة، زر المباشر، والرسائل
+  const [saved, setSaved] = useState(null);
+  const [mode, setMode] = useState("private");
+  const [general, setGeneral] = useState("");
+  const [direct, setDirect] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+
+  // جلب الإعدادات الحالية
+  useEffect(() => {
+    sb.rpc("admin_get_access", { p_secret: secret }).then(({ data, error }) => {
+      if (error || !data || !data.length) return setMsg({ type: "error", text: NET_ERR });
+      setSaved(data[0]); setMode(data[0].mode); setGeneral(data[0].general_password || ""); setDirect(!!data[0].direct);
+    });
+  }, [secret]);
+
+  // حفظ النوع وكلمة المرور العامة وزر المباشر
+  async function save() {
+    setBusy(true); setMsg(null);
+    const { data, error } = await sb.rpc("admin_set_access", {
+      p_secret: secret, p_mode: mode, p_general_password: mode === "general" || general.trim() ? general.trim() : null, p_direct: null,
+    });
+    setBusy(false);
+    if (error) return setMsg({ type: "error", text: error.message.includes("4") ? "كلمة المرور العامة يجب ألا تقل عن 4 أحرف أو أرقام." : "تعذّر الحفظ، يرجى المحاولة مرة أخرى." });
+    setSaved(data[0]);
+    setMsg({ type: "ok", text: "تم حفظ إعدادات الدخول." });
+  }
+
+  // مفتاح زر التقديم المباشر: يُحفظ فوراً عند الضغط (دون انتظار زر «حفظ»)
+  async function toggleDirect(on) {
+    setDirect(on); setMsg(null);
+    const { data, error } = await sb.rpc("admin_set_access", { p_secret: secret, p_mode: null, p_general_password: null, p_direct: on });
+    if (error || !data || !data.length) { setDirect(!on); return setMsg({ type: "error", text: "تعذّر حفظ المفتاح، يرجى المحاولة مرة أخرى." }); }
+    setSaved(data[0]);
+    setMsg({ type: "ok", text: on ? "تم الحفظ: زر «تقديم شكوى مباشرة» ظاهر الآن للمشتكين." : "تم الحفظ: زر «تقديم شكوى مباشرة» مخفي الآن." });
+  }
+
+  // توليد كلمة مرور عامة عشوائية من 6 أرقام
+  const generate = () => { const a = new Uint32Array(1); crypto.getRandomValues(a); setGeneral(String(a[0] % 1000000).padStart(6, "0")); };
+
+  // خيارات نوع كلمة المرور
+  const MODES = [
+    ["general", "🔑 كلمة مرور عامة", "كلمة واحدة للجميع، تغيّرها متى شئت"],
+    ["private", "🔐 كلمة مرور خاصة", "4 أرقام لكل شخص، تُستخدم مرة واحدة"],
+  ];
+
+  // العرض: مفتاح زر المباشر، بطاقات النوع، كلمة المرور العامة (عند اختيارها)، زر الحفظ، ثم الكلمات الخاصة
+  if (!saved) return msg ? <Alert type={msg.type}>{msg.text}</Alert> : <Loading />;
+  return (
+    <div>
+      <div className="card">
+        <h2>دخول المشتكين</h2>
+        {msg && <Alert type={msg.type}>{msg.text}</Alert>}
+        <label className={`switch-row ${direct ? "on" : ""}`}>
+          <input type="checkbox" checked={direct} onChange={e => toggleDirect(e.target.checked)} />
+          <span className="switch" aria-hidden="true"></span>
+          <span>
+            <b>إظهار زر «📝 تقديم شكوى مباشرة»</b>
+            <small className="muted" style={{ display: "block" }}>{direct ? "ظاهر: يستطيع أي زائر التقديم بلا كلمة مرور" : "مخفي: لا يقدّم إلا من لديه كلمة مرور"}</small>
+          </span>
+        </label>
+        <div className="field-label" style={{ margin: "14px 0 8px" }}>نوع كلمة المرور في الصفحة الأولى</div>
+        <div className="modes">
+          {MODES.map(([k, t, d]) => (
+            <button key={k} type="button" className={`mode ${mode === k ? "active" : ""}`} onClick={() => { setMode(k); setMsg(null); }}>
+              <b>{t}{saved.mode === k && <span className="muted" style={{ fontSize: 12.5 }}> · الحالي</span>}</b><span>{d}</span>
+            </button>
+          ))}
+        </div>
+        {mode === "general" && (
+          <div style={{ marginTop: 14 }}>
+            <Field label="كلمة المرور العامة" hint="4 أحرف أو أرقام على الأقل؛ تغييرها يوقف القديمة فوراً">
+              <div className="row" style={{ flexWrap: "nowrap" }}>
+                <input type="text" dir="ltr" className="code-input" style={{ fontSize: 20 }} value={general} onChange={e => setGeneral(e.target.value)} maxLength={30} />
+                <button type="button" className="btn secondary" onClick={generate}>🎲 توليد</button>
+              </div>
+            </Field>
+            {saved.general_password && (
+              <button type="button" className="btn secondary sm" style={{ marginTop: 10 }}
+                onClick={async () => setMsg(await copyText(`لتقديم شكوى إلى لجنة الحج افتح الرابط:\n${siteUrl()}\nكلمة المرور: ${saved.general_password}`) ? { type: "ok", text: "تم نسخ الرابط وكلمة المرور." } : { type: "error", text: "تعذّر النسخ." })}>
+                📋 نسخ الرابط مع كلمة المرور المحفوظة
+              </button>
+            )}
+          </div>
+        )}
+        <button className="btn block" style={{ marginTop: 16 }} disabled={busy} onClick={save}>{busy ? "جارٍ الحفظ…" : "حفظ نوع كلمة المرور"}</button>
+      </div>
+      {saved.mode === "private" && <AdminCodes secret={secret} />}
+      {mode === "private" && saved.mode !== "private" && <Alert type="info">احفظ الوضع «كلمة مرور خاصة» لتظهر أدوات توليد كلمات المرور.</Alert>}
+    </div>
+  );
+}
+
+// كلمات المرور الخاصة: توليد كلمة لشخص، نسخ رسالتها، وقائمة الكلمات السابقة
+function AdminCodes({ secret }) {
+  // الملاحظة (لمن؟)، الكلمة المولّدة الأخيرة، القائمة، والرسائل
+  const [note, setNote] = useState("");
+  const [created, setCreated] = useState(null);
+  const [list, setList] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+
+  // جلب آخر 100 كلمة مرور
+  const load = useCallback(async () => {
+    const { data, error } = await sb.rpc("admin_list_codes", { p_secret: secret });
+    if (error) return setMsg({ type: "error", text: NET_ERR });
+    setList(data || []);
+  }, [secret]);
+  useEffect(() => { load(); }, [load]);
+
+  // توليد كلمة مرور جديدة (4 أرقام، لمرة واحدة)
+  async function generate(e) {
+    e.preventDefault();
+    setBusy(true); setMsg(null);
+    const { data, error } = await sb.rpc("admin_create_code", { p_secret: secret, p_note: note });
+    setBusy(false);
+    if (error || !data || !data.length) return setMsg({ type: "error", text: "تعذّر التوليد، يرجى المحاولة مرة أخرى." });
+    setCreated({ code: data[0].code, note: note.trim() });
+    setNote("");
+    load();
+  }
+
+  // إلغاء كلمة مرور لم تُستخدم
+  async function remove(id) {
+    const { data } = await sb.rpc("admin_delete_code", { p_secret: secret, p_id: id });
+    if (data) load();
+  }
+
+  // نص الرسالة للمشتكي
+  const text = c => `لتقديم شكواك إلى لجنة الحج افتح الرابط:\n${siteUrl()}\nكلمة المرور الخاصة بك: ${c}`;
+
+  // العرض: نموذج التوليد، الكلمة الجديدة وزر النسخ، ثم القائمة
+  return (
+    <div>
+      <form className="card" onSubmit={generate}>
+        <h2>كلمة مرور خاصة لمشتكٍ</h2>
+        {msg && <Alert type={msg.type}>{msg.text}</Alert>}
+        <Field label="لمن؟ (اختياري)" hint="اسم الشخص أو رقمه، للتذكير فقط">
+          <input type="text" value={note} onChange={e => setNote(e.target.value)} maxLength={200} />
+        </Field>
+        <button className="btn gold block" style={{ marginTop: 14 }} disabled={busy}>{busy ? "جارٍ التوليد…" : "🔑 توليد كلمة مرور"}</button>
+        {created && (
+          <div style={{ marginTop: 16 }}>
+            <div className="muted center">كلمة المرور{created.note ? ` لـ ${created.note}` : ""}</div>
+            <div className="big-code">{created.code}</div>
+            <button type="button" className="btn secondary block" onClick={async () => setMsg(await copyText(text(created.code)) ? { type: "ok", text: "تم نسخ الرسالة." } : { type: "error", text: "تعذّر النسخ." })}>📋 نسخ الرسالة</button>
+          </div>
+        )}
+      </form>
+      <div className="card">
+        <h2>كلمات المرور الخاصة السابقة</h2>
+        {list === null ? <Loading /> : list.length === 0 ? <p className="muted">لا توجد كلمات مرور بعد.</p> : (
+          <ul className="list">
+            {list.map(r => (
+              <li key={r.id}>
+                <div>
+                  <span className="mono">{r.code}</span> {r.note && <span className="muted">· {r.note}</span>}
+                  <div className="muted" style={{ fontSize: 13 }}>
+                    {r.used_at ? <>استُخدمت {fmtDate(r.used_at)} · شكوى <span dir="ltr">{r.complaint_number || "—"}</span></> : <>لم تُستخدم بعد · وُلّدت {fmtDate(r.created_at)}</>}
+                  </div>
+                </div>
+                {r.used_at ? <span className="badge st-closed">مستخدمة</span> : <button className="btn danger-text" onClick={() => remove(r.id)}>إلغاء</button>}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// تبويب كلمات مرور الإدارة (صفحة التقارير): إضافة شخص، نسخ رسالته، وإيقاف/تفعيل
+// ---------------------------------------------------------------------
+function AdminViewers({ secret }) {
+  // اسم الشخص الجديد، الكلمة المولّدة الأخيرة، القائمة، والرسائل
+  const [name, setName] = useState("");
+  const [created, setCreated] = useState(null);
+  const [list, setList] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+
+  // جلب أصحاب كلمات المرور
+  const load = useCallback(async () => {
+    const { data, error } = await sb.rpc("admin_list_viewers", { p_secret: secret });
+    if (error) return setMsg({ type: "error", text: NET_ERR });
+    setList(data || []);
+  }, [secret]);
+  useEffect(() => { load(); }, [load]);
+
+  // إضافة شخص وتوليد كلمة مروره
+  async function create(e) {
+    e.preventDefault();
+    if (!name.trim()) return setMsg({ type: "error", text: "يرجى كتابة اسم الشخص." });
+    setBusy(true); setMsg(null);
+    const { data, error } = await sb.rpc("admin_create_viewer", { p_secret: secret, p_name: name });
+    setBusy(false);
+    if (error || !data || !data.length) return setMsg({ type: "error", text: "تعذّر الإضافة، يرجى المحاولة مرة أخرى." });
+    setCreated(data[0]);
+    setName("");
+    load();
+  }
+
+  // إيقاف كلمة مرور أو إعادة تفعيلها
+  async function toggle(r) {
+    const { data } = await sb.rpc("admin_set_viewer_active", { p_secret: secret, p_id: r.id, p_active: !r.active });
+    if (data) load();
+  }
+
+  // نص الرسالة لصاحب كلمة المرور
+  const text = r => `رابط تقارير شكاوى لجنة الحج:\n${siteUrl()}#/reports\nكلمة المرور الخاصة بك: ${r.code}`;
+
+  // العرض: نموذج الإضافة، الكلمة الجديدة وزر النسخ، ثم القائمة
+  return (
+    <div>
+      <form className="card" onSubmit={create}>
+        <h2>كلمة مرور إدارة لشخص جديد</h2>
+        {msg && <Alert type={msg.type}>{msg.text}</Alert>}
+        <Field label="الاسم"><input type="text" value={name} onChange={e => setName(e.target.value)} maxLength={200} /></Field>
+        <button className="btn gold block" style={{ marginTop: 14 }} disabled={busy}>{busy ? "جارٍ الإضافة…" : "📊 توليد كلمة مرور"}</button>
+        {created && (
+          <div style={{ marginTop: 16 }}>
+            <div className="muted center">كلمة مرور {created.name}</div>
+            <div className="big-code">{created.code}</div>
+            <button type="button" className="btn secondary block" onClick={async () => setMsg(await copyText(text(created)) ? { type: "ok", text: "تم نسخ الرسالة." } : { type: "error", text: "تعذّر النسخ." })}>📋 نسخ الرسالة</button>
+          </div>
+        )}
+      </form>
+      <div className="card">
+        <h2>أصحاب كلمات مرور الإدارة</h2>
+        {list === null ? <Loading /> : list.length === 0 ? <p className="muted">لم تُضف أي شخص بعد.</p> : (
+          <ul className="list">
+            {list.map(r => (
+              <li key={r.id}>
+                <div>
+                  <b>{r.name}</b> · <span className="mono">{r.code}</span>
+                  <div className="muted" style={{ fontSize: 13 }}>آخر دخول: {fmtDateTime(r.last_seen_at)}</div>
+                </div>
+                <button className={`btn sm ${r.active ? "secondary" : ""}`} onClick={() => toggle(r)}>{r.active ? "إيقاف" : "تفعيل"}</button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// =====================================================================
+// الصفحة 4: التقارير (‎#/reports)
+// =====================================================================
+// أعداد الشكاوى خلال فترة + جدول الشكاوى
+function ReportsPage({ code, viewerName }) {
+  // الفترة (افتراضياً من أول الشهر حتى اليوم)، البيانات، والخطأ
+  const now = new Date();
+  const [range, setRange] = useState({ from: toDateInput(new Date(now.getFullYear(), now.getMonth(), 1)), to: toDateInput(now) });
+  const [rows, setRows] = useState(null);
+  const [error, setError] = useState("");
+
+  // جلب شكاوى الفترة عبر viewer_report؛ نهاية الفترة تشمل اليوم الأخير كاملاً
+  const load = useCallback(async () => {
+    setError("");
+    if (range.from && range.to && range.from > range.to) return setError("تاريخ البداية يجب أن يسبق تاريخ النهاية.");
+    setRows(null);
+    const pFrom = range.from ? new Date(`${range.from}T00:00:00`).toISOString() : null;
+    let pTo = null;
+    if (range.to) { const d = new Date(`${range.to}T00:00:00`); d.setDate(d.getDate() + 1); pTo = d.toISOString(); }
+    const { data, error } = await sb.rpc("viewer_report", { p_code: code, p_from: pFrom, p_to: pTo });
+    if (error) return setError(NET_ERR);
+    setRows(data || []);
+  }, [code, range]);
+  useEffect(() => { load(); }, [load]);
+
+  // أزرار الفترات السريعة
+  function preset(kind) {
+    const t = new Date();
+    if (kind === "month") setRange({ from: toDateInput(new Date(t.getFullYear(), t.getMonth(), 1)), to: toDateInput(t) });
+    if (kind === "30") { const f = new Date(t); f.setDate(f.getDate() - 29); setRange({ from: toDateInput(f), to: toDateInput(t) }); }
+    if (kind === "all") setRange({ from: "", to: "" });
+  }
+
+  // الأعداد: الإجمالي، المغلقة، والمفتوحة (كل ما لم يُغلق)
+  const total = rows ? rows.length : 0;
+  const closed = rows ? rows.filter(r => r.status === CLOSED).length : 0;
+
+  // العرض: الفلتر، بطاقات الأعداد، ثم الجدول (يتحول لبطاقات على الجوال)
+  return (
+    <div>
+      <div className="page-head">
+        <h1>تقارير الشكاوى</h1>
+        <p>أهلاً {viewerName}</p>
+      </div>
+      <div className="card" style={{ marginBottom: 16 }}>
+        <div className="filters">
+          <Field label="من تاريخ"><input type="date" value={range.from} onChange={e => setRange(r => ({ ...r, from: e.target.value }))} /></Field>
+          <Field label="إلى تاريخ"><input type="date" value={range.to} onChange={e => setRange(r => ({ ...r, to: e.target.value }))} /></Field>
+        </div>
+        <div className="row" style={{ marginTop: 10 }}>
+          <button className="btn secondary sm" onClick={() => preset("month")}>هذا الشهر</button>
+          <button className="btn secondary sm" onClick={() => preset("30")}>آخر 30 يوماً</button>
+          <button className="btn secondary sm" onClick={() => preset("all")}>كل الفترات</button>
+        </div>
+      </div>
+      {error && <Alert type="error">{error}</Alert>}
+      {rows === null ? (!error && <Loading />) : (
+        <>
+          <div className="kpis">
+            <div className="kpi"><div className="label">إجمالي الشكاوى</div><div className="value">{total}</div></div>
+            <div className="kpi closed"><div className="label">المغلقة</div><div className="value">{closed}</div></div>
+            <div className="kpi open"><div className="label">المفتوحة</div><div className="value">{total - closed}</div></div>
+          </div>
+          <div className="card" style={{ padding: 0 }}>
+            {rows.length === 0 ? <div className="empty">لا توجد شكاوى في هذه الفترة</div> : (
+              <div className="table-wrap" style={{ maxHeight: "none" }}>
+                <table className="stack">
+                  <thead>
+                    <tr><th>الحالة</th><th>رقم الشكوى</th><th>اسم المشتكي</th><th>المشتكى عليه</th><th>الموضوع</th><th>النتيجة</th><th>تاريخ الإغلاق</th></tr>
+                  </thead>
+                  <tbody>
+                    {rows.map(r => (
+                      <tr key={r.complaint_number} className={`status-row ${stClass(r.status)}`}>
+                        <td data-label="الحالة"><StatusBadge value={r.status} /></td>
+                        <td data-label="رقم الشكوى"><b dir="ltr">{r.complaint_number}</b></td>
+                        <td data-label="اسم المشتكي">{r.complainant_name}</td>
+                        <td data-label="المشتكى عليه">{r.accused_name || "—"}</td>
+                        <td data-label="الموضوع" className="subj">{r.subject}</td>
+                        <td data-label="النتيجة" className="subj">{r.result || "—"}</td>
+                        <td data-label="تاريخ الإغلاق">{fmtDate(r.closed_date)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// =====================================================================
+// التطبيق الرئيسي
+// =====================================================================
+// يختار الصفحة حسب الرابط: ‎#/admin، ‎#/reports، ‎#/result، وغير ذلك ← المشتكي
+function App() {
+  // الرابط الحالي، وكلمتا الأدمن والإدارة المحفوظتان للنافذة الحالية
+  const hash = useHash();
+  const [adminSecret, setAdminSecret] = useState(() => storeGet(sessionStorage, "hajj_admin"));
+  const [viewer, setViewer] = useState(() => { try { return JSON.parse(storeGet(sessionStorage, "hajj_viewer")); } catch { return null; } });
+
+  // حفظ كلمات المرور أو حذفها عند الخروج
+  const setAdmin = s => { storeSet(sessionStorage, "hajj_admin", s); setAdminSecret(s); };
+  const setView = v => { storeSet(sessionStorage, "hajj_viewer", v ? JSON.stringify(v) : null); setViewer(v); };
+
+  // التحقق من كلمة مرور الأدمن عبر admin_login
+  async function verifyAdmin(value) {
+    const { data, error } = await sb.rpc("admin_login", { p_secret: value });
+    if (error) return NET_ERR;
+    return data === "ok" ? null : "كلمة مرور الأدمن غير صحيحة.";
+  }
+
+  // التحقق من كلمة مرور الإدارة عبر viewer_login (تُرجع اسم الشخص)
+  let viewerName = "";
+  async function verifyViewer(value) {
+    const { data, error } = await sb.rpc("viewer_login", { p_code: value });
+    if (error) return NET_ERR;
+    if (!data || data === "LOCKED") return "كلمة المرور غير صحيحة أو موقوفة.";
+    viewerName = data;
+    return null;
+  }
+
+  // اختيار الصفحة والشريط العلوي
+  let page, label = "", logout = null;
+  if (!sb) page = <SetupNotice />;
+  else if (hash === "#/admin") {
+    label = "الأدمن";
+    if (adminSecret) { page = <AdminPage secret={adminSecret} />; logout = () => setAdmin(null); }
+    else page = <GatePage title="صفحة الأدمن" label="كلمة مرور الأدمن" secret verify={verifyAdmin} onPass={setAdmin} />;
+  } else if (hash === "#/reports") {
+    label = "التقارير";
+    if (viewer) { page = <ReportsPage code={viewer.code} viewerName={viewer.name} />; logout = () => setView(null); }
+    else page = <GatePage title="تقارير الشكاوى" sub="أدخل كلمة مرور الإدارة الخاصة بك" label="كلمة مرور الإدارة" secret
+                  verify={verifyViewer} onPass={code => setView({ code, name: viewerName })} />;
+  } else if (hash === "#/result") { label = "نتيجة الشكوى"; page = <ResultPage />; }
+  else page = <ComplainantPage />;
+
+  // روابط الشريط السفلي: كل الصفحات من رابط واحد (يُخفى رابط الصفحة الحالية)
+  const current = ["#/admin", "#/reports", "#/result"].includes(hash) ? hash : "#";
+  const LINKS = [["#", "🏠 الرئيسية"], ["#/result", "🔎 نتيجة الشكوى"], ["#/admin", "🛠️ الإدارة"], ["#/reports", "📊 التقارير"]];
+
+  // العرض: الشريط العلوي، الصفحة المختارة، ثم الشريط السفلي بالروابط
+  return (
+    <>
+      <Header label={label} onLogout={logout} />
+      <main className="container">{page}</main>
+      <footer className="site-footer">
+        {LINKS.filter(([h]) => h !== current).map(([h, t]) => <a key={h} href={h}>{t}</a>)}
+      </footer>
+    </>
+  );
+}
+
+// تشغيل التطبيق داخل العنصر ‎#root
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>

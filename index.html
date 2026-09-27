@@ -1,0 +1,27 @@
+<!doctype html>
+<!--
+=======================================================================
+  الملف: index.html
+  المشروع: منصة شكاوى لجنة الحج
+  الوصف: الصفحة الافتراضية للموقع؛ تحوّل الزائر فوراً إلى main.html مع الحفاظ على
+         جزء # في الرابط (مثل ‎#/admin أو ‎#/reports) حتى يعمل الرابط القصير للموقع.
+  سجل التعديلات:
+    2026-09-27  الإصدار الأول (لرفع المنصة على GitHub Pages).
+=======================================================================
+-->
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<title>منصة شكاوى لجنة الحج</title>
+<!-- تحويل احتياطي إن كانت JavaScript معطّلة -->
+<meta http-equiv="refresh" content="0; url=main.html">
+<!-- التحويل الفوري مع الحفاظ على الصفحة المطلوبة بعد # -->
+<script>location.replace("main.html" + location.hash);</script>
+</head>
+<body>
+<!-- رابط يدوي يظهر فقط إن تأخر التحويل -->
+<p style="font-family: Tahoma, sans-serif; text-align: center; margin-top: 40px;">
+  <a href="main.html">اضغط هنا لفتح منصة شكاوى لجنة الحج</a>
+</p>
+</body>
+</html>

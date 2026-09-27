@@ -1,0 +1,42 @@
+# =======================================================================
+#  الملف: .github/workflows/keep-alive.yml
+#  المشروع: منصة شكاوى لجنة الحج
+#  الوصف: «روبوت الإبقاء مستيقظاً» — يزور قاعدة بيانات Supabase مرة كل يوم، حتى لا يوقف
+#         Supabase المشروع المجاني بسبب عدم الاستخدام (يتوقف بعد نحو أسبوع بلا نشاط).
+#  ملاحظات:
+#    - يستخدم المفتاح العام (anon) نفسه الموجود في config.js؛ لا يحتاج أي سر.
+#    - يستدعي الدالة get_access_config (قراءة فقط، لا تغيّر أي بيانات).
+#    - يمكن تشغيله يدوياً من تبويب Actions في GitHub ← Keep Supabase awake ← Run workflow.
+#    - GitHub يوقف المهام المجدولة إن لم يتغيّر المستودع 60 يوماً؛ يعاد تفعيلها من تبويب Actions.
+#  سجل التعديلات:
+#    2026-09-27  الإصدار الأول.
+# =======================================================================
+
+# اسم المهمة كما يظهر في تبويب Actions
+name: Keep Supabase awake
+
+# متى تعمل: كل يوم الساعة 06:00 بتوقيت UTC (09:00 بتوقيت مكة)، ويمكن تشغيلها يدوياً
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+# صلاحيات دنيا: قراءة المستودع فقط
+permissions:
+  contents: read
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      # قراءة رابط المشروع والمفتاح العام من config.js ثم استدعاء Supabase؛ تفشل المهمة إن لم يُجب
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Ping Supabase
+        run: |
+          URL=$(grep -o 'https://[a-z0-9]*\.supabase\.co' config.js | head -1)
+          KEY=$(grep -o 'eyJ[^"]*' config.js | head -1)
+          curl --fail --silent --show-error -X POST "$URL/rest/v1/rpc/get_access_config" \
+            -H "apikey: $KEY" -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" -d '{}'
+          echo
+          echo "Supabase is awake."
