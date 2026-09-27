@@ -35,6 +35,7 @@
                 يخفيه الأدمن بمفتاح؛ إضافة رقم التواصل للنموذج والجدول والتفاصيل والتصدير.
     2026-09-24  مفتاح زر التقديم المباشر يُحفظ فوراً عند الضغط (كان يحتاج زر «حفظ» فلا يُطبَّق).
     2026-09-27  رابط واحد لكل المنصة: شريط سفلي بروابط الرئيسية ونتيجة الشكوى والإدارة والتقارير.
+    2026-09-27  حذف الشريط السفلي بطلب الإدارة (الإدارة والتقارير تُفتحان بروابطهما ‎#/admin و ‎#/reports).
 =======================================================================
 -->
 <html lang="ar" dir="rtl">
@@ -286,11 +287,6 @@
   .kpi.open { border-top-color: #1d5fbf; background: #eaf2fd; } .kpi.open .value { color: #1d5fbf; }
   .filters { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
   .filters .field { flex: 1 1 140px; }
-
-  /* الشريط السفلي: روابط كل الصفحات من رابط واحد (يلتف على الجوال) */
-  .site-footer { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 18px; padding: 16px 16px calc(20px + env(safe-area-inset-bottom, 0px)); border-top: 1px solid var(--line); background: #fff; font-size: 14px; }
-  .site-footer a { color: var(--muted); text-decoration: none; font-weight: 600; padding: 4px 6px; border-radius: 6px; }
-  .site-footer a:hover { color: var(--brand); background: var(--brand-soft); }
 
   /* أدوات عامة */
   .muted { color: var(--muted); }
@@ -1596,18 +1592,11 @@ function App() {
   } else if (hash === "#/result") { label = "نتيجة الشكوى"; page = <ResultPage />; }
   else page = <ComplainantPage />;
 
-  // روابط الشريط السفلي: كل الصفحات من رابط واحد (يُخفى رابط الصفحة الحالية)
-  const current = ["#/admin", "#/reports", "#/result"].includes(hash) ? hash : "#";
-  const LINKS = [["#", "🏠 الرئيسية"], ["#/result", "🔎 نتيجة الشكوى"], ["#/admin", "🛠️ الإدارة"], ["#/reports", "📊 التقارير"]];
-
-  // العرض: الشريط العلوي، الصفحة المختارة، ثم الشريط السفلي بالروابط
+  // العرض: الشريط العلوي ثم الصفحة المختارة
   return (
     <>
       <Header label={label} onLogout={logout} />
       <main className="container">{page}</main>
-      <footer className="site-footer">
-        {LINKS.filter(([h]) => h !== current).map(([h, t]) => <a key={h} href={h}>{t}</a>)}
-      </footer>
     </>
   );
 }
