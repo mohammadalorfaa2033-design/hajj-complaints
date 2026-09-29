@@ -52,6 +52,7 @@
                 حذف 00 من بداية الأرقام، وزر 🎤 لتحويل الكلام إلى نص؛ الحقول الجديدة في الجدول والتقارير والتصدير.
     2026-09-29  ثلاث نتائج (نتيجة الشكوى الداخلية، ما يراه المشتكي، ما يراه المعترض) — الجلسات تُرحِّل إلى
                 الداخلية فقط؛ الجلسات تُعدَّل ولا تُحذف؛ فتح شكوى من «المطلوب» يطلب تحديد التنبيه القادم والمطلوب عنده.
+    2026-09-29  مربع «المطلوب»: زر «إغلاق الشكوى بدلاً من ذلك»، ومربع أخضر «ستُغلق» عند اختيار «مغلقة».
 =======================================================================
 -->
 <html lang="ar" dir="rtl">
@@ -283,6 +284,8 @@
 
   /* مربع «حدّد موعد التنبيه القادم» عند فتح الشكوى من «المطلوب» */
   .due-prompt { background: #fff4e6; border: 2px solid #f3c99a; border-radius: 12px; padding: 12px; margin-bottom: 14px; }
+  .due-prompt.closed { background: #e8f6ed; border-color: #9fd3b1; }
+  .due-prompt .grid .btn { white-space: normal; }
 
   /* عنوان الاعتراض في نافذة الشكوى */
   .c-title { font-weight: 800; font-size: 16px; margin-top: 10px; }
@@ -1422,7 +1425,7 @@ function AdminComplaints({ secret, rows, onSaved, reload, onOpen }) {
 // والاعتراض والجلسات والسجل. fromDue: فُتحت من «المطلوب» فيظهر في أعلاها طلب تحديد التنبيه القادم
 function ComplaintCard({ secret, complaint: c, onSaved, onSessionsChanged, fromDue }) {
   // القيم القابلة للتعديل وحالة الحفظ
-  const [v, setV] = useState({
+  const [vState, setV] = useState({
     classification: c.classification || "",
     referred_to: c.referred_to || "",
     status: c.status,
@@ -1436,6 +1439,7 @@ function ComplaintCard({ secret, complaint: c, onSaved, onSessionsChanged, fromD
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null);
   const [logVer, setLogVer] = useState(0);   // يزيد عند تغيّر الجلسات فيُعاد جلب سجل الشكوى
+  const v = vState;
   const set = key => e => { setV(x => ({ ...x, [key]: e.target.value })); setMsg(null); };
 
   // عند اختيار «مغلقة» يُملأ تاريخ الإغلاق بتاريخ اليوم إن كان فارغاً؛ وأي حالة أخرى تمسح التاريخ
@@ -1452,8 +1456,10 @@ function ComplaintCard({ secret, complaint: c, onSaved, onSessionsChanged, fromD
     setMsg(null);
   }
 
-  // الحفظ عبر admin_update_complaint
-  async function save() {
+  // الحفظ عبر admin_update_complaint؛ overrides: قيم تُطبَّق فوراً قبل الحفظ (مثل الإغلاق السريع)
+  async function save(overrides) {
+    const v = { ...vState, ...(overrides || {}) };
+    if (overrides) setV(v);
     setBusy(true); setMsg(null);
     const { data, error } = await sb.rpc("admin_update_complaint", {
       p_secret: secret, p_id: c.id, p_classification: v.classification, p_referred_to: v.referred_to,
@@ -1470,10 +1476,15 @@ function ComplaintCard({ secret, complaint: c, onSaved, onSessionsChanged, fromD
   // حفظ التنبيه القادم من مربع «المطلوب»: التاريخ والمطلوب إلزاميان (إلا إن كانت الشكوى ستُغلق)
   function saveReminder() {
     if (v.status !== CLOSED && (!v.reminder || !v.reminder_note.trim()))
-      return setMsg({ type: "error", text: "حدّد تاريخ ووقت التنبيه القادم، واكتب المطلوب عنده." });
+      return setMsg({ type: "error", text: "حدّد تاريخ ووقت التنبيه القادم، واكتب المطلوب عنده — أو اضغط «إغلاق الشكوى بدلاً من ذلك»." });
     if (v.reminder && new Date(v.reminder) <= new Date() && v.status !== CLOSED)
       return setMsg({ type: "error", text: "موعد التنبيه القادم يجب أن يكون في المستقبل." });
     save();
+  }
+
+  // إغلاق سريع من مربع «المطلوب»: الحالة «مغلقة» بتاريخ اليوم، بلا تنبيه، ثم الحفظ
+  function closeNow() {
+    save({ status: CLOSED, closed: v.closed || toDateInput(new Date()), reminder: "", reminder_note: "" });
   }
 
   // بعد إضافة جلسة: تحديث الشكوى في القائمة وتحديث الحقول المعروضة بالقيم المرحَّلة
@@ -1510,10 +1521,16 @@ function ComplaintCard({ secret, complaint: c, onSaved, onSessionsChanged, fromD
       {c.title && <div className="c-title">📝 {c.title}</div>}
       <div className="subject">{c.subject}</div>
       {msg && <Alert type={msg.type}>{msg.text}</Alert>}
-      {fromDue && (
+      {fromDue && (v.status === CLOSED ? (
+        <div className="due-prompt closed">
+          <b>🔒 الشكوى ستُغلق — لا حاجة لتنبيه قادم</b>
+          <small className="muted" style={{ display: "block", marginBottom: 10 }}>تاريخ الإغلاق: {v.closed || toDateInput(new Date())} (يمكن تغييره من خانة «تاريخ الإغلاق» في الأسفل).</small>
+          <button type="button" className="btn block" disabled={busy} onClick={() => save()}>{busy ? "جارٍ الحفظ…" : "حفظ وإغلاق"}</button>
+        </div>
+      ) : (
         <div className="due-prompt">
           <b>⏰ حدّد موعد التنبيه القادم والمطلوب عنده</b>
-          <small className="muted" style={{ display: "block", marginBottom: 10 }}>حتى تعود هذه الشكوى إلى «المطلوب» في موعدها ولا تُنسى. إن كانت ستُغلق فاختر الحالة «مغلقة» في الأسفل.</small>
+          <small className="muted" style={{ display: "block", marginBottom: 10 }}>حتى تعود هذه الشكوى إلى «المطلوب» في موعدها ولا تُنسى. وإن انتهت متابعتها فأغلقها بالزر في الأسفل.</small>
           <div className="grid">
             <Field label="تاريخ ووقت التنبيه" required>
               <div className="row" style={{ flexWrap: "nowrap" }}>
@@ -1523,9 +1540,12 @@ function ComplaintCard({ secret, complaint: c, onSaved, onSessionsChanged, fromD
             </Field>
             <Field label="المطلوب عند التنبيه" required><input type="text" value={v.reminder_note} onChange={set("reminder_note")} maxLength={500} placeholder="مثال: الاتصال بمسؤول السكن" /></Field>
           </div>
-          <button type="button" className="btn gold block" style={{ marginTop: 10 }} disabled={busy} onClick={saveReminder}>{busy ? "جارٍ الحفظ…" : "حفظ التنبيه والتعديلات"}</button>
+          <div className="grid" style={{ gridTemplateColumns: "1fr 1fr", marginTop: 10 }}>
+            <button type="button" className="btn gold" disabled={busy} onClick={saveReminder}>{busy ? "جارٍ الحفظ…" : "حفظ التنبيه والتعديلات"}</button>
+            <button type="button" className="btn secondary" disabled={busy} onClick={closeNow}>🔒 إغلاق الشكوى بدلاً من ذلك</button>
+          </div>
         </div>
-      )}
+      ))}
       <div className="grid">
         <Field label="التصنيف">
           <select value={v.classification} onChange={set("classification")}>
@@ -1562,7 +1582,7 @@ function ComplaintCard({ secret, complaint: c, onSaved, onSessionsChanged, fromD
           <textarea style={{ minHeight: 70 }} value={v.accused_result} onChange={set("accused_result")} maxLength={2000} />
         </Field>
       </div>
-      <button className="btn block" style={{ marginTop: 14 }} disabled={busy} onClick={save}>{busy ? "جارٍ الحفظ…" : "حفظ"}</button>
+      <button className="btn block" style={{ marginTop: 14 }} disabled={busy} onClick={() => save()}>{busy ? "جارٍ الحفظ…" : "حفظ"}</button>
       <ObjectionSection secret={secret} complaint={c} onSaved={onSaved} />
       <SessionsSection secret={secret} complaint={c} onApplied={applyFromSession} onChanged={() => { setLogVer(n => n + 1); (onSessionsChanged || (() => {}))(); }} />
       <HistorySection secret={secret} complaint={c} version={logVer} />
@@ -1996,7 +2016,7 @@ function AdminAccess({ secret }) {
             )}
           </div>
         )}
-        <button className="btn block" style={{ marginTop: 16 }} disabled={busy} onClick={save}>{busy ? "جارٍ الحفظ…" : "حفظ نوع كلمة المرور"}</button>
+        <button className="btn block" style={{ marginTop: 16 }} disabled={busy} onClick={() => save()}>{busy ? "جارٍ الحفظ…" : "حفظ نوع كلمة المرور"}</button>
       </div>
       {saved.mode === "private" && <AdminCodes secret={secret} />}
       {mode === "private" && saved.mode !== "private" && <Alert type="info">احفظ الوضع «كلمة مرور خاصة» لتظهر أدوات توليد كلمات المرور.</Alert>}
