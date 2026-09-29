@@ -13,6 +13,7 @@
 //    2026-09-24  تحديث أوصاف القواعد للحالات الجديدة (جديد / قيد المراجعة / جاري المتابعة / مغلقة).
 //    2026-09-29  إضافة ACTIVATE_URL: رابط روبوت تنشيط Supabase على GitHub.
 //    2026-09-29  إضافة OBJECTION_DAYS: مهلة الاعتراض الافتراضية بالأيام.
+//    2026-09-29  نقل المستودع إلى منظمة syrian-hajj-complaints؛ تحديث رابط ACTIVATE_URL.
 // =======================================================================
 
 // كائن الإعدادات العام؛ يقرؤه main.html عند التشغيل
@@ -26,7 +27,7 @@ window.APP_CONFIG = {
   WHATSAPP_NUMBER: "",
 
   // رابط «تنشيط قاعدة البيانات» (روبوت GitHub): يظهر أسفل دخول الأدمن؛ اتركه فارغاً لإخفائه
-  ACTIVATE_URL: "https://github.com/mohammadalorfaa2033-design/hajj-complaints/actions/workflows/keep-alive.yml",
+  ACTIVATE_URL: "https://github.com/syrian-hajj-complaints/syrian-hajj-complaints.github.io/actions/workflows/keep-alive.yml",
 
   // مهلة الاعتراض الافتراضية بالأيام (تُقترح عند توليد رمز الاعتراض، ويمكن تغييرها لكل شكوى)
   OBJECTION_DAYS: 3,
