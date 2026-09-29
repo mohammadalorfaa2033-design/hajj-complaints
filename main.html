@@ -12,6 +12,7 @@
        ← «تم تسجيل الشكوى بنجاح» مع رقم الشكوى ورمز المتابعة.
     2) نتيجة الشكوى (‎#/result): الشكاوى المحفوظة على الجهاز تلقائياً، أو بالرقم + رمز المتابعة
        ← الحالة والنتيجة وتاريخ الإغلاق فقط.
+    2ب) الاعتراض (‎#/objection): المشتكى عليه برقم الشكوى + رمز الاعتراض ← الملخص فقط ← اعتراض واحد.
     3) الأدمن (‎#/admin): «المطلوب» (تنبيهات ذكية) وجدول الشكاوى (اختيار عدة صفوف وتغييرها معاً،
        وتصدير Excel)، إعدادات دخول المشتكين، وكلمات مرور الإدارة.
     4) التقارير (‎#/reports): بكلمة مرور الإدارة — أعداد الشكاوى خلال فترة وجدول بحالاتها.
@@ -39,6 +40,8 @@
     2026-09-29  الجلسات: قسم في تفاصيل كل شكوى (سجل + إضافة جلسة تُرحِّل المحال إليه والنتيجة والحالة
                 إلى الشكوى) وتبويب «الجلسات» (اليوم / القادمة / السابقة / الكل). رابط «تنشيط قاعدة البيانات»
                 أسفل دخول الأدمن يفتح روبوت GitHub.
+    2026-09-29  اعتراض المشتكى عليه: قسم في تفاصيل الشكوى لتوليد رمز اعتراض مع ملخص، وصفحة عامة ‎#/objection
+                يقدّم فيها اعتراضه مرة واحدة؛ تنبيه «وصل اعتراض» في «المطلوب»، وعمود «الاعتراض» في الجدول.
 =======================================================================
 -->
 <html lang="ar" dir="rtl">
@@ -684,6 +687,103 @@ function ResultPage() {
   );
 }
 
+// =====================================================================
+// صفحة اعتراض المشتكى عليه (‎#/objection)
+// =====================================================================
+// يُدخل رقم الشكوى ورمز الاعتراض، فيرى الملخص فقط (دون بيانات المشتكي)، ويقدّم اعتراضه مرة واحدة
+function ObjectionPage() {
+  // مدخلات الدخول، بيانات الشكوى المعروضة، نص الاعتراض، والرسائل
+  const [number, setNumber] = useState("");
+  const [code, setCode] = useState("");
+  const [view, setView] = useState(null);
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [done, setDone] = useState(false);
+
+  // جلب ما يراه المشتكى عليه عبر objection_view
+  async function lookup(num, cod) {
+    const { data, error: rpcErr } = await sb.rpc("objection_view", { p_number: num, p_code: cod });
+    if (rpcErr) return NET_ERR;
+    if (!data || !data.length) return "رقم الشكوى أو رمز الاعتراض غير صحيح.";
+    setView(data[0]);
+    return null;
+  }
+
+  // الدخول بالرقم والرمز
+  async function open(e) {
+    e.preventDefault();
+    setError("");
+    if (!number.trim() || !code.trim()) return setError("يرجى إدخال رقم الشكوى ورمز الاعتراض.");
+    setBusy(true);
+    const err = await lookup(number.trim(), code.trim());
+    setBusy(false);
+    if (err) setError(err);
+  }
+
+  // تقديم الاعتراض عبر submit_objection (مرة واحدة)
+  async function submit(e) {
+    e.preventDefault();
+    setError("");
+    if (!text.trim()) return setError("يرجى كتابة اعتراضك.");
+    setBusy(true);
+    const { data, error: rpcErr } = await sb.rpc("submit_objection", { p_number: number.trim(), p_code: code.trim(), p_text: text });
+    setBusy(false);
+    if (rpcErr) return setError("تعذّر إرسال الاعتراض، يرجى المحاولة مرة أخرى.");
+    if (data === "INVALID") return setError("رقم الشكوى أو رمز الاعتراض لم يعد صالحاً.");
+    if (data === "ALREADY") setError("سبق تقديم الاعتراض على هذه الشكوى.");
+    else setDone(true);
+    await lookup(number.trim(), code.trim());
+  }
+
+  // العرض: نموذج الدخول، ثم الملخص ونموذج الاعتراض (أو الاعتراض المقدَّم)
+  return (
+    <div className="narrow">
+      <div className="page-head">
+        <h1>⚖️ الاعتراض على شكوى</h1>
+        <p>للاطلاع على الشكوى المقدّمة بحقك وتقديم اعتراضك (مرة واحدة)</p>
+      </div>
+      {!view ? (
+        <form className="card" onSubmit={open} noValidate>
+          {error && <Alert type="error">{error}</Alert>}
+          <div className="grid">
+            <Field label="رقم الشكوى" hint="مثال: HJ-2026-00001"><input type="text" dir="ltr" value={number} onChange={e => setNumber(e.target.value)} maxLength={30} /></Field>
+            <Field label="رمز الاعتراض" hint="6 أرقام"><input type="text" inputMode="numeric" dir="ltr" value={code} onChange={e => setCode(e.target.value)} maxLength={6} /></Field>
+          </div>
+          <button className="btn block" style={{ marginTop: 14 }} disabled={busy}>{busy ? "جارٍ التحقق…" : "عرض الشكوى"}</button>
+        </form>
+      ) : (
+        <>
+          <div className="card">
+            <div className="c-head">
+              <div className="c-no">{view.complaint_number}</div>
+              <span className="muted">📅 {fmtDate(view.received_date)}</span>
+            </div>
+            <div className="field-label">ملخص الشكوى</div>
+            <div className="subject" style={{ marginBottom: 0 }}>{view.summary}</div>
+          </div>
+          {done && <Alert type="ok">✅ تم تسجيل اعتراضك بنجاح، وستراجعه اللجنة.</Alert>}
+          {error && <Alert type="error">{error}</Alert>}
+          {view.objection_at ? (
+            <div className="card">
+              <h2>اعتراضك</h2>
+              <div className="muted" style={{ fontSize: 13.5 }}>قُدّم في {fmtDateTime(view.objection_at)} — لا يمكن تعديله.</div>
+              <div className="subject" style={{ marginTop: 6, marginBottom: 0 }}>{view.objection_text}</div>
+            </div>
+          ) : (
+            <form className="card" onSubmit={submit} noValidate>
+              <Field label="نص الاعتراض" required hint="يُقبل الاعتراض مرة واحدة فقط، فاكتبه كاملاً قبل الإرسال">
+                <textarea value={text} onChange={e => setText(e.target.value)} maxLength={5000} style={{ minHeight: 150 }} />
+              </Field>
+              <button className="btn block" style={{ marginTop: 14 }} disabled={busy}>{busy ? "جارٍ الإرسال…" : "إرسال الاعتراض"}</button>
+            </form>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 // بطاقة نتيجة شكوى: الرقم، التاريخ، الحالة، النتيجة، وتاريخ الإغلاق
 function ResultCard({ r }) {
   return (
@@ -722,11 +822,14 @@ function ago(ms) {
 // تنبيهات شكوى واحدة كما تكون في وقت مرجعي ref (الآن افتراضياً، أو يوم يختاره الأدمن)
 // تُرجع قائمة {level: danger/warn/info/later, text}
 function smartAlerts(c, ref = new Date()) {
-  if (c.status === CLOSED) return [];
+  // اعتراض المشتكى عليه لم يُراجع بعد (لم تُحفظ الشكوى بعد وصوله) — يظهر حتى لو كانت مغلقة
+  const objection = c.objection_at && new Date(c.updated_at || 0) - new Date(c.objection_at) < 5000
+    ? [{ level: "warn", text: `⚖️ وصل اعتراض من المشتكى عليه (${fmtDateTime(c.objection_at)}) — افتح الشكوى لمراجعته` }] : [];
+  if (c.status === CLOSED) return objection;
   const now = ref.getTime();
   const age = now - new Date(c.received_date);                     // عمر الشكوى
   const idle = now - new Date(c.updated_at || c.received_date);   // منذ آخر تعديل
-  const out = [];
+  const out = [...objection];
 
   // بداية ونهاية اليوم المرجعي، وهل هو اليوم الحالي (لصياغة النص)
   const sod = new Date(ref); sod.setHours(0, 0, 0, 0);
@@ -845,9 +948,11 @@ const COLUMNS = [
   { key: "result", label: "النتيجة", sort: c => c.result, text: c => c.result, wrap: true, cell: c => c.result ? <span className="clip">{c.result}</span> : muted() },
   { key: "closed", label: "تاريخ الإغلاق", sort: c => c.closed_date ? new Date(c.closed_date).getTime() : null, text: c => c.closed_date ? fmtDate(c.closed_date) : "", cell: c => c.closed_date ? fmtDate(c.closed_date) : muted() },
   { key: "tracking", label: "رمز المتابعة", sort: c => c.tracking_code, text: c => c.tracking_code, cell: c => <span dir="ltr">{c.tracking_code || "—"}</span> },
+  { key: "objection", label: "الاعتراض", sort: c => c.objection_at ? new Date(c.objection_at).getTime() : null, text: c => c.objection_text || "",
+    cell: c => c.objection_at ? <span className="badge st-review">⚖️ {fmtDate(c.objection_at)}</span> : c.objection_code ? <span className="muted">بانتظار الاعتراض</span> : muted() },
 ];
 // الأعمدة المخفية افتراضياً (يمكن إظهارها من قائمة الأعمدة)
-const DEFAULT_HIDDEN = ["result", "tracking"];
+const DEFAULT_HIDDEN = ["result", "tracking", "objection"];
 
 // تفضيلات الجدول المحفوظة على الجهاز: الأعمدة المخفية، حجم الخط، عدد الأسطر
 function usePref(key, initial) {
@@ -1216,7 +1321,74 @@ function ComplaintCard({ secret, complaint: c, onSaved, onSessionsChanged }) {
         <Field label="النتيجة (يراها المشتكي)" full><textarea style={{ minHeight: 80 }} value={v.result} onChange={set("result")} maxLength={2000} /></Field>
       </div>
       <button className="btn block" style={{ marginTop: 14 }} disabled={busy} onClick={save}>{busy ? "جارٍ الحفظ…" : "حفظ"}</button>
+      <ObjectionSection secret={secret} complaint={c} onSaved={onSaved} />
       <SessionsSection secret={secret} complaint={c} onApplied={applyFromSession} onChanged={onSessionsChanged || (() => {})} />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// اعتراض المشتكى عليه (في تفاصيل الشكوى): عرض الاعتراض إن وصل، وتوليد رمز الاعتراض مع الملخص
+// ---------------------------------------------------------------------
+function ObjectionSection({ secret, complaint: c, onSaved }) {
+  // الملخص الذي سيراه المشتكى عليه (يبدأ بنص الشكوى)، فتح نموذج التوليد، والرسائل
+  const [summary, setSummary] = useState(c.objection_summary || c.subject || "");
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+
+  // توليد الرمز عبر admin_set_objection_code (إعادة التوليد تُبطل الرمز القديم)
+  async function generate() {
+    if (!summary.trim()) return setMsg({ type: "error", text: "اكتب الملخص الذي سيراه المشتكى عليه." });
+    setBusy(true); setMsg(null);
+    const { data, error } = await sb.rpc("admin_set_objection_code", { p_secret: secret, p_id: c.id, p_summary: summary });
+    setBusy(false);
+    if (error || !data || !data.length) return setMsg({ type: "error", text: "تعذّر توليد الرمز، يرجى المحاولة مرة أخرى." });
+    onSaved(data[0]);
+    setOpen(false);
+    setMsg({ type: "ok", text: "تم توليد رمز الاعتراض. انسخ الرسالة وأرسلها للمشتكى عليه." });
+  }
+
+  // نص الرسالة للمشتكى عليه
+  const text = `للاطلاع على الشكوى المقدّمة بحقك وتقديم اعتراضك (مرة واحدة) افتح الرابط:\n${siteUrl()}#/objection\nرقم الشكوى: ${c.complaint_number}\nرمز الاعتراض: ${c.objection_code}`;
+
+  // العرض: الاعتراض المقدَّم (إن وُجد)، ثم الرمز الحالي أو نموذج التوليد
+  return (
+    <div className="sessions">
+      <h3>⚖️ اعتراض المشتكى عليه</h3>
+      {msg && <Alert type={msg.type}>{msg.text}</Alert>}
+      {c.objection_at ? (
+        <>
+          <div className="muted" style={{ fontSize: 13.5 }}>قُدّم في {fmtDateTime(c.objection_at)}</div>
+          <div className="subject" style={{ marginTop: 6 }}>{c.objection_text}</div>
+        </>
+      ) : c.objection_code && !open ? (
+        <>
+          <p className="muted" style={{ marginTop: 0 }}>لم يقدّم المشتكى عليه اعتراضه بعد. رمز الاعتراض:</p>
+          <div className="big-code" style={{ fontSize: 28 }}>{c.objection_code}</div>
+          <div className="grid" style={{ gridTemplateColumns: "1fr 1fr" }}>
+            <button type="button" className="btn secondary" onClick={async () => setMsg(await copyText(text) ? { type: "ok", text: "تم نسخ الرسالة." } : { type: "error", text: "تعذّر النسخ." })}>📋 نسخ الرسالة</button>
+            <button type="button" className="btn secondary" onClick={() => { setOpen(true); setMsg(null); }}>🔄 رمز جديد / تعديل الملخص</button>
+          </div>
+        </>
+      ) : !open ? (
+        <>
+          <p className="muted" style={{ marginTop: 0 }}>لم يُرسَل للمشتكى عليه رمز اعتراض بعد.</p>
+          <button type="button" className="btn secondary block" onClick={() => setOpen(true)}>⚖️ توليد رمز اعتراض للمشتكى عليه</button>
+        </>
+      ) : null}
+      {open && !c.objection_at && (
+        <div className="session-form">
+          <Field label="الملخص الذي سيراه المشتكى عليه" hint="احذف منه ما قد يكشف هوية المشتكي؛ لا يظهر له اسم المشتكي ولا رقمه">
+            <textarea style={{ minHeight: 90 }} value={summary} onChange={e => setSummary(e.target.value)} maxLength={5000} />
+          </Field>
+          {c.objection_code && <small className="hint" style={{ display: "block", marginTop: 6 }}>توليد رمز جديد يُبطل الرمز السابق.</small>}
+          <div className="grid" style={{ gridTemplateColumns: "1fr 1fr", marginTop: 10 }}>
+            <button type="button" className="btn gold" disabled={busy} onClick={generate}>{busy ? "جارٍ التوليد…" : "توليد الرمز"}</button>
+            <button type="button" className="btn secondary" onClick={() => setOpen(false)}>تراجع</button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1770,6 +1942,7 @@ function App() {
     else page = <GatePage title="تقارير الشكاوى" sub="أدخل كلمة مرور الإدارة الخاصة بك" label="كلمة مرور الإدارة" secret
                   verify={verifyViewer} onPass={code => setView({ code, name: viewerName })} />;
   } else if (hash === "#/result") { label = "نتيجة الشكوى"; page = <ResultPage />; }
+  else if (hash === "#/objection") { label = "الاعتراض"; page = <ObjectionPage />; }
   else page = <ComplainantPage />;
 
   // العرض: الشريط العلوي ثم الصفحة المختارة

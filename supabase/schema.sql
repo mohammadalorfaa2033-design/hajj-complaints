@@ -35,6 +35,8 @@
 --    2026-09-27  حذف سجل المحاولات (جدول login_attempts والدالتين request_ip و log_attempt) بطلب الإدارة.
 --    2026-09-29  جدول الجلسات (sessions): رقم الشكوى، التاريخ والوقت، المحال إليه، نتيجة الجلسة، الحالة؛
 --                أحدث جلسة تُرحِّل المحال إليه والنتيجة والحالة إلى جدول الشكاوى (مشغّل sessions_after_insert).
+--    2026-09-29  اعتراض المشتكى عليه: رمز اعتراض يولّده الأدمن مع ملخص، وصفحة عامة يقدّم فيها اعتراضه
+--                مرة واحدة (objection_view / submit_objection / admin_set_objection_code).
 -- =====================================================================
 
 -- ---------------------------------------------------------------------
@@ -101,6 +103,9 @@ drop function if exists public.sessions_after_insert() cascade;
 drop function if exists public.admin_list_sessions(text, uuid);
 drop function if exists public.admin_add_session(text, uuid, timestamptz, text, text, text);
 drop function if exists public.admin_delete_session(text, uuid);
+drop function if exists public.objection_view(text, text);
+drop function if exists public.submit_objection(text, text, text);
+drop function if exists public.admin_set_objection_code(text, uuid, text);
 drop function if exists public.setting(text);
 
 -- تفعيل pgcrypto لتوليد أرقام عشوائية آمنة
@@ -132,6 +137,10 @@ create table public.complaints (
   reminder_at       timestamptz,                          -- تنبيه متابعة يدوي (الأدمن)
   reminder_note     text,                                 -- المطلوب عند التنبيه (الأدمن)
   updated_at        timestamptz not null default now(),   -- آخر تعديل (تلقائي؛ للتنبيهات الذكية)
+  objection_code    text,                                 -- رمز اعتراض المشتكى عليه، 6 أرقام (يولّده الأدمن)
+  objection_summary text,                                 -- الملخص الذي يراه المشتكى عليه (يكتبه الأدمن)
+  objection_text    text,                                 -- نص اعتراض المشتكى عليه (مرة واحدة)
+  objection_at      timestamptz,                          -- وقت تقديم الاعتراض
   created_at        timestamptz not null default now()
 );
 
@@ -439,6 +448,54 @@ language sql stable security definer set search_path = public as $$
     and c.tracking_code = regexp_replace(translate(coalesce(p_code, ''), '٠١٢٣٤٥٦٧٨٩', '0123456789'), '\D', '', 'g');
 $$;
 
+-- ---------------------------------------------------------------------
+-- 8ب) اعتراض المشتكى عليه (مرة واحدة، برقم الشكوى + رمز الاعتراض)
+-- ---------------------------------------------------------------------
+-- ما يراه المشتكى عليه: رقم الشكوى وتاريخها والملخص الذي كتبه الأدمن، واعتراضه إن قدّمه (دون بيانات المشتكي)
+create function public.objection_view(p_number text, p_code text)
+returns table (complaint_number text, received_date timestamptz, summary text, objection_text text, objection_at timestamptz)
+language sql stable security definer set search_path = public as $$
+  select c.complaint_number, c.received_date, c.objection_summary, c.objection_text, c.objection_at
+  from public.complaints c
+  where upper(c.complaint_number) = upper(btrim(coalesce(p_number, '')))
+    and c.objection_code is not null
+    and c.objection_code = regexp_replace(translate(coalesce(p_code, ''), '٠١٢٣٤٥٦٧٨٩', '0123456789'), '\D', '', 'g');
+$$;
+
+-- تقديم الاعتراض: 'OK' عند النجاح، 'INVALID' إن كان الرقم أو الرمز خاطئاً، 'ALREADY' إن سبق تقديمه
+create function public.submit_objection(p_number text, p_code text, p_text text)
+returns text
+language plpgsql security definer set search_path = public as $$
+declare
+  v_id   uuid;
+  v_done timestamptz;
+begin
+  if coalesce(btrim(p_text), '') = '' then
+    raise exception 'نص الاعتراض فارغ';
+  end if;
+  if length(p_text) > 5000 then
+    raise exception 'تجاوز النص الطول المسموح';
+  end if;
+  select c.id, c.objection_at into v_id, v_done
+  from public.complaints c
+  where upper(c.complaint_number) = upper(btrim(coalesce(p_number, '')))
+    and c.objection_code is not null
+    and c.objection_code = regexp_replace(translate(coalesce(p_code, ''), '٠١٢٣٤٥٦٧٨٩', '0123456789'), '\D', '', 'g')
+  for update;
+  if v_id is null then
+    return 'INVALID';
+  end if;
+  if v_done is not null then
+    return 'ALREADY';
+  end if;
+  update public.complaints set objection_text = btrim(p_text), objection_at = now() where id = v_id;
+  return 'OK';
+end $$;
+
+-- السماح للموقع باستدعاء دالتي الاعتراض
+grant execute on function public.objection_view(text, text)         to anon, authenticated;
+grant execute on function public.submit_objection(text, text, text) to anon, authenticated;
+
 -- السماح للموقع باستدعاء دوال المشتكي
 grant execute on function public.get_access_config()                           to anon, authenticated;
 grant execute on function public.check_access_code(text)                        to anon, authenticated;
@@ -663,6 +720,25 @@ begin
   return found;
 end $$;
 
+-- توليد رمز اعتراض للمشتكى عليه (6 أرقام) وحفظ الملخص الذي سيراه؛ تُرجع الشكوى بعد التحديث
+-- (إعادة التوليد تُبطل الرمز القديم، ولا تمسح اعتراضاً سبق تقديمه)
+create function public.admin_set_objection_code(p_secret text, p_id uuid, p_summary text)
+returns setof public.complaints
+language plpgsql security definer set search_path = public as $$
+begin
+  if public.verify_password('أدمن', p_secret) is null then
+    return;
+  end if;
+  if coalesce(btrim(p_summary), '') = '' then
+    raise exception 'يرجى كتابة الملخص الذي سيراه المشتكى عليه';
+  end if;
+  update public.complaints
+     set objection_code = public.random_password(6, true),
+         objection_summary = btrim(left(p_summary, 5000))
+   where id = p_id;
+  return query select * from public.complaints where id = p_id;
+end $$;
+
 -- قائمة الجلسات: لشكوى معيّنة (p_complaint_id)، أو كل الجلسات إن كان فارغاً (الأحدث أولاً)
 create function public.admin_list_sessions(p_secret text, p_complaint_id uuid)
 returns table (id uuid, complaint_id uuid, complaint_number text, complainant_name text,
@@ -711,6 +787,7 @@ begin
 end $$;
 
 -- السماح للموقع باستدعاء دوال الأدمن (محمية بكلمة مرور الأدمن داخلها)
+grant execute on function public.admin_set_objection_code(text, uuid, text) to anon, authenticated;
 grant execute on function public.admin_list_sessions(text, uuid)           to anon, authenticated;
 grant execute on function public.admin_add_session(text, uuid, timestamptz, text, text, text) to anon, authenticated;
 grant execute on function public.admin_delete_session(text, uuid)          to anon, authenticated;
