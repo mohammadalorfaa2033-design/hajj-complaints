@@ -36,6 +36,9 @@
     2026-09-24  مفتاح زر التقديم المباشر يُحفظ فوراً عند الضغط (كان يحتاج زر «حفظ» فلا يُطبَّق).
     2026-09-27  رابط واحد لكل المنصة: شريط سفلي بروابط الرئيسية ونتيجة الشكوى والإدارة والتقارير.
     2026-09-27  حذف الشريط السفلي بطلب الإدارة (الإدارة والتقارير تُفتحان بروابطهما ‎#/admin و ‎#/reports).
+    2026-09-29  الجلسات: قسم في تفاصيل كل شكوى (سجل + إضافة جلسة تُرحِّل المحال إليه والنتيجة والحالة
+                إلى الشكوى) وتبويب «الجلسات» (اليوم / القادمة / السابقة / الكل). رابط «تنشيط قاعدة البيانات»
+                أسفل دخول الأدمن يفتح روبوت GitHub.
 =======================================================================
 -->
 <html lang="ar" dir="rtl">
@@ -251,6 +254,11 @@
   .c-no { font-weight: 800; direction: ltr; }
   .meta { color: var(--muted); font-size: 13.5px; display: flex; gap: 4px 14px; flex-wrap: wrap; }
   .subject { background: #f8f9f7; border-radius: 9px; padding: 10px 12px; margin: 10px 0 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+  /* قسم الجلسات داخل تفاصيل الشكوى: فاصل منقّط، وجدول صغير، ونموذج جلسة جديدة */
+  .sessions { margin-top: 20px; padding-top: 16px; border-top: 2px dashed var(--line); }
+  .sessions h3 { margin: 0 0 10px; font-size: 16px; }
+  .session-form { background: rgba(255,255,255,.7); border: 1px solid var(--line); border-radius: 10px; padding: 12px; }
 
   /* وضع دخول المشتكين: بطاقات اختيار */
   .modes { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; }
@@ -758,13 +766,15 @@ const dueAlerts = (c, ref) => smartAlerts(c, ref).filter(a => a.level !== "later
 const alertWeight = alerts =>
   alerts.some(a => a.level === "danger") ? 0 : alerts.some(a => a.level === "warn") ? 1 : alerts.some(a => a.level === "info") ? 2 : 3;
 
-// التبويبات بعد الدخول: «المطلوب» أولاً، ثم الشكاوى، دخول المشتكين، وكلمات مرور الإدارة
+// التبويبات بعد الدخول: «المطلوب» أولاً، ثم الشكاوى، الجلسات، دخول المشتكين، وكلمات مرور الإدارة
 function AdminPage({ secret }) {
-  // التبويب الحالي، الشكاوى (تُجلب مرة واحدة لكل التبويبات)، والشكوى المفتوحة في نافذة التفاصيل
+  // التبويب الحالي، الشكاوى (تُجلب مرة واحدة لكل التبويبات)، الشكوى المفتوحة في نافذة التفاصيل،
+  // ورقم نسخة الجلسات (يزيد عند إضافة/حذف جلسة فيُعاد جلب تبويب الجلسات)
   const [tab, setTab] = useState("today");
   const [rows, setRows] = useState(null);
   const [error, setError] = useState("");
   const [openId, setOpenId] = useState(null);
+  const [sessVer, setSessVer] = useState(0);
 
   // جلب كل الشكاوى
   const load = useCallback(async () => {
@@ -794,19 +804,21 @@ function AdminPage({ secret }) {
           📅 المطلوب{dueCount > 0 && <span className="tab-count">{dueCount}</span>}
         </button>
         <button className={tab === "complaints" ? "active" : ""} onClick={() => setTab("complaints")}>📋 الشكاوى</button>
+        <button className={tab === "sessions" ? "active" : ""} onClick={() => setTab("sessions")}>🗓️ الجلسات</button>
         <button className={tab === "access" ? "active" : ""} onClick={() => setTab("access")}>🔐 دخول المشتكين</button>
         <button className={tab === "viewers" ? "active" : ""} onClick={() => setTab("viewers")}>📊 كلمات مرور الإدارة</button>
       </div>
       {error && <Alert type="error">{error}</Alert>}
       {tab === "today" && <AdminDue secret={secret} rows={rows} onSaved={onSaved} reload={reload} onOpen={c => setOpenId(c.id)} />}
       {tab === "complaints" && <AdminComplaints secret={secret} rows={rows} onSaved={onSaved} reload={reload} onOpen={c => setOpenId(c.id)} />}
+      {tab === "sessions" && <AdminSessions secret={secret} version={sessVer} onOpen={c => setOpenId(c.id)} />}
       {tab === "access" && <AdminAccess secret={secret} />}
       {tab === "viewers" && <AdminViewers secret={secret} />}
       {opened && (
         <div className="modal-back" onClick={() => setOpenId(null)}>
           <div className="modal" onClick={e => e.stopPropagation()}>
             <div className="modal-close"><button className="btn secondary sm" onClick={() => setOpenId(null)}>✕ إغلاق</button></div>
-            <ComplaintCard key={opened.id} secret={secret} complaint={opened} onSaved={onSaved} />
+            <ComplaintCard key={opened.id} secret={secret} complaint={opened} onSaved={onSaved} onSessionsChanged={() => setSessVer(n => n + 1)} />
           </div>
         </div>
       )}
@@ -1102,8 +1114,8 @@ function AdminComplaints({ secret, rows, onSaved, reload, onOpen }) {
   );
 }
 
-// تفاصيل شكوى واحدة (في النافذة): البيانات + التصنيف، الترحيل، الحالة، النتيجة، الإغلاق، والتنبيه
-function ComplaintCard({ secret, complaint: c, onSaved }) {
+// تفاصيل شكوى واحدة (في النافذة): البيانات + التصنيف، الترحيل، الحالة، النتيجة، الإغلاق، التنبيه، والجلسات
+function ComplaintCard({ secret, complaint: c, onSaved, onSessionsChanged }) {
   // القيم القابلة للتعديل وحالة الحفظ
   const [v, setV] = useState({
     classification: c.classification || "",
@@ -1145,6 +1157,13 @@ function ComplaintCard({ secret, complaint: c, onSaved }) {
     if (error || !data || !data.length) return setMsg({ type: "error", text: "تعذّر الحفظ، يرجى المحاولة مرة أخرى." });
     onSaved(data[0]);
     setMsg({ type: "ok", text: "تم الحفظ." });
+  }
+
+  // بعد إضافة جلسة: تحديث الشكوى في القائمة وتحديث الحقول المعروضة بالقيم المرحَّلة
+  function applyFromSession(u) {
+    onSaved(u);
+    setV(x => ({ ...x, referred_to: u.referred_to || "", status: u.status, result: u.result || "",
+                 closed: u.closed_date ? toDateInput(new Date(u.closed_date)) : "" }));
   }
 
   // التنبيهات الذكية للشكوى كما هي محفوظة
@@ -1197,6 +1216,166 @@ function ComplaintCard({ secret, complaint: c, onSaved }) {
         <Field label="النتيجة (يراها المشتكي)" full><textarea style={{ minHeight: 80 }} value={v.result} onChange={set("result")} maxLength={2000} /></Field>
       </div>
       <button className="btn block" style={{ marginTop: 14 }} disabled={busy} onClick={save}>{busy ? "جارٍ الحفظ…" : "حفظ"}</button>
+      <SessionsSection secret={secret} complaint={c} onApplied={applyFromSession} onChanged={onSessionsChanged || (() => {})} />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// الجلسات
+// ---------------------------------------------------------------------
+// قسم الجلسات داخل تفاصيل الشكوى: سجل جلساتها + إضافة جلسة تُرحَّل قيمها إلى الشكوى
+function SessionsSection({ secret, complaint, onApplied, onChanged }) {
+  // سجل الجلسات، نموذج الجلسة الجديدة (يبدأ بالوقت الحالي وقيم الشكوى الحالية)، والرسائل
+  const [list, setList] = useState(null);
+  const [form, setForm] = useState(() => ({ at: toDateTimeInput(new Date()), referred_to: complaint.referred_to || "", result: "", status: complaint.status }));
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const [confirmDel, setConfirmDel] = useState(null);
+  const set = key => e => { setForm(f => ({ ...f, [key]: e.target.value })); setMsg(null); };
+
+  // جلب جلسات هذه الشكوى
+  const load = useCallback(async () => {
+    const { data, error } = await sb.rpc("admin_list_sessions", { p_secret: secret, p_complaint_id: complaint.id });
+    if (error) { setList([]); return setMsg({ type: "error", text: NET_ERR }); }
+    setList(data || []);
+  }, [secret, complaint.id]);
+  useEffect(() => { load(); }, [load]);
+
+  // إضافة الجلسة عبر admin_add_session؛ قاعدة البيانات ترحّل قيمها إلى الشكوى إن كانت أحدث جلسة
+  async function add(e) {
+    e.preventDefault();
+    if (!form.at) return setMsg({ type: "error", text: "حدّد تاريخ ووقت الجلسة." });
+    setBusy(true); setMsg(null);
+    const { data, error } = await sb.rpc("admin_add_session", {
+      p_secret: secret, p_complaint_id: complaint.id, p_session_at: dateTimeInputToIso(form.at),
+      p_referred_to: form.referred_to, p_result: form.result, p_status: form.status,
+    });
+    setBusy(false);
+    if (error || !data || !data.length) return setMsg({ type: "error", text: "تعذّر إضافة الجلسة، يرجى المحاولة مرة أخرى." });
+    onApplied(data[0]);
+    setForm(f => ({ ...f, at: toDateTimeInput(new Date()), result: "" }));
+    setMsg({ type: "ok", text: "تمت إضافة الجلسة، ورُحِّل المحال إليه والنتيجة والحالة إلى الشكوى (إن كانت أحدث جلسة)." });
+    load(); onChanged();
+  }
+
+  // حذف جلسة سُجّلت بالخطأ (بعد تأكيد)
+  async function remove(id) {
+    setConfirmDel(null);
+    const { data } = await sb.rpc("admin_delete_session", { p_secret: secret, p_id: id });
+    if (data) { load(); onChanged(); setMsg({ type: "ok", text: "حُذفت الجلسة. قيم الشكوى لم تتغيّر؛ عدّلها من الأعلى إن لزم." }); }
+  }
+
+  // العرض: عنوان القسم، سجل الجلسات، ثم نموذج جلسة جديدة
+  return (
+    <div className="sessions">
+      <h3>🗓️ الجلسات {list && `(${list.length})`}</h3>
+      {msg && <Alert type={msg.type}>{msg.text}</Alert>}
+      {list === null ? <Loading /> : list.length === 0 ? <p className="muted" style={{ marginTop: 0 }}>لا توجد جلسات لهذه الشكوى بعد.</p> : (
+        <div className="table-wrap" style={{ maxHeight: 280, marginBottom: 12, border: "1px solid var(--line)" }}>
+          <table className="sheet">
+            <thead><tr><th>التاريخ والوقت</th><th>ترحيل / مُحالة إلى</th><th>نتيجة الجلسة</th><th>حالة الشكوى</th><th></th></tr></thead>
+            <tbody>
+              {list.map(s => (
+                <tr key={s.id} className={`status-row ${stClass(s.status)}`} style={{ cursor: "default" }}>
+                  <td>{fmtDateTime(s.session_at)}</td>
+                  <td>{s.referred_to || <span className="muted">—</span>}</td>
+                  <td className="wrap">{s.result || <span className="muted">—</span>}</td>
+                  <td><StatusBadge value={s.status} /></td>
+                  <td>
+                    {confirmDel === s.id
+                      ? <><button className="btn danger-text" onClick={() => remove(s.id)}>تأكيد الحذف</button><button className="btn danger-text" style={{ color: "var(--muted)" }} onClick={() => setConfirmDel(null)}>تراجع</button></>
+                      : <button className="btn danger-text" onClick={() => setConfirmDel(s.id)}>حذف</button>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <form onSubmit={add} className="session-form">
+        <div className="field-label" style={{ marginBottom: 8 }}>➕ جلسة جديدة</div>
+        <div className="grid">
+          <Field label="التاريخ والوقت" required><input type="datetime-local" value={form.at} onChange={set("at")} /></Field>
+          <Field label="ترحيل / مُحالة إلى"><input type="text" value={form.referred_to} onChange={set("referred_to")} maxLength={200} placeholder="الجهة أو الشخص" /></Field>
+          <Field label="حالة الشكوى" required>
+            <select value={form.status} onChange={set("status")}>{STATUSES.map(x => <option key={x}>{x}</option>)}</select>
+          </Field>
+          <Field label="نتيجة الجلسة" full><textarea style={{ minHeight: 70 }} value={form.result} onChange={set("result")} maxLength={2000} /></Field>
+        </div>
+        <button className="btn gold block" style={{ marginTop: 12 }} disabled={busy}>{busy ? "جارٍ الإضافة…" : "إضافة الجلسة وترحيلها إلى الشكوى"}</button>
+        <small className="hint" style={{ display: "block", marginTop: 6 }}>المحال إليه ونتيجة الجلسة وحالتها تنتقل إلى الشكوى تلقائياً؛ الحقل الفارغ لا يمسح قيمة الشكوى.</small>
+      </form>
+    </div>
+  );
+}
+
+// تبويب «الجلسات»: كل الجلسات (اليوم / القادمة / السابقة / الكل) مع بحث؛ الضغط على صف يفتح شكواه
+function AdminSessions({ secret, version, onOpen }) {
+  // الجلسات، التصفية، البحث، والخطأ
+  const [list, setList] = useState(null);
+  const [filter, setFilter] = useState("today");
+  const [search, setSearch] = useState("");
+  const [error, setError] = useState("");
+
+  // جلب كل الجلسات (يُعاد عند إضافة أو حذف جلسة من نافذة الشكوى)
+  const load = useCallback(async () => {
+    setError("");
+    const { data, error } = await sb.rpc("admin_list_sessions", { p_secret: secret, p_complaint_id: null });
+    if (error) { setList([]); return setError(NET_ERR); }
+    setList(data || []);
+  }, [secret]);
+  useEffect(() => { load(); }, [load, version]);
+
+  // التصفية حسب الفترة، ثم البحث بالرقم أو الاسم أو الجهة أو النتيجة؛ القادمة مرتّبة من الأقرب
+  const now = new Date(), sod = new Date(now); sod.setHours(0, 0, 0, 0);
+  const eod = new Date(sod); eod.setDate(eod.getDate() + 1);
+  const inFilter = s => {
+    const t = new Date(s.session_at);
+    return filter === "today" ? t >= sod && t < eod : filter === "upcoming" ? t >= now : filter === "past" ? t < now : true;
+  };
+  const term = search.trim();
+  let visible = (list || []).filter(s => inFilter(s) &&
+    (!term || [s.complaint_number, s.complainant_name, s.referred_to, s.result].some(v => (v || "").includes(term))));
+  if (filter === "upcoming") visible = [...visible].sort((a, b) => new Date(a.session_at) - new Date(b.session_at));
+  const count = f => (list || []).filter(s => { const t = new Date(s.session_at);
+    return f === "today" ? t >= sod && t < eod : f === "upcoming" ? t >= now : f === "past" ? t < now : true; }).length;
+
+  // العرض: أزرار التصفية مع الأعداد، البحث، ثم جدول الجلسات
+  return (
+    <div>
+      <div className="chips">
+        {[["today", "اليوم"], ["upcoming", "القادمة"], ["past", "السابقة"], ["all", "الكل"]].map(([k, t]) => (
+          <button key={k} className={filter === k ? "active" : ""} onClick={() => setFilter(k)}>{t} ({count(k)})</button>
+        ))}
+      </div>
+      <div className="row" style={{ marginBottom: 12 }}>
+        <input className="grow" type="text" placeholder="بحث برقم الشكوى أو الاسم أو الجهة أو النتيجة…" value={search} onChange={e => setSearch(e.target.value)} />
+        <button className="btn secondary" onClick={() => { setList(null); load(); }}>🔄 تحديث</button>
+      </div>
+      <p className="muted" style={{ fontSize: 13.5, marginTop: 0 }}>لإضافة جلسة: افتح الشكوى من تبويب «الشكاوى» ثم قسم «الجلسات» أسفلها. اضغط على أي صف هنا لفتح شكواه.</p>
+      {error && <Alert type="error">{error}</Alert>}
+      <div className="card" style={{ padding: 0 }}>
+        {list === null ? <Loading /> : visible.length === 0 ? <div className="empty">لا توجد جلسات</div> : (
+          <div className="table-wrap">
+            <table className="sheet">
+              <thead><tr><th>رقم الشكوى</th><th>المشتكي</th><th>التاريخ والوقت</th><th>ترحيل / مُحالة إلى</th><th>نتيجة الجلسة</th><th>حالة الشكوى</th></tr></thead>
+              <tbody>
+                {visible.map(s => (
+                  <tr key={s.id} className={`status-row ${stClass(s.status)}`} onClick={() => onOpen({ id: s.complaint_id })}>
+                    <td><b dir="ltr">{s.complaint_number}</b></td>
+                    <td>{s.complainant_name}</td>
+                    <td>{fmtDateTime(s.session_at)}</td>
+                    <td>{s.referred_to || <span className="muted">—</span>}</td>
+                    <td className="wrap"><span className="clip">{s.result || "—"}</span></td>
+                    <td><StatusBadge value={s.status} /></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -1583,7 +1762,8 @@ function App() {
   else if (hash === "#/admin") {
     label = "الأدمن";
     if (adminSecret) { page = <AdminPage secret={adminSecret} />; logout = () => setAdmin(null); }
-    else page = <GatePage title="صفحة الأدمن" label="كلمة مرور الأدمن" secret verify={verifyAdmin} onPass={setAdmin} />;
+    else page = <GatePage title="صفحة الأدمن" label="كلمة مرور الأدمن" secret verify={verifyAdmin} onPass={setAdmin}
+                  footer={cfg.ACTIVATE_URL && <div className="below-link"><a href={cfg.ACTIVATE_URL} target="_blank" rel="noopener">⚡ المنصة لا تعمل؟ تنشيط قاعدة البيانات</a></div>} />;
   } else if (hash === "#/reports") {
     label = "التقارير";
     if (viewer) { page = <ReportsPage code={viewer.code} viewerName={viewer.name} />; logout = () => setView(null); }

@@ -7,6 +7,7 @@
 --
 --  الجداول:
 --    1) complaints       الشكاوى (رمز متابعة للمشتكي، تنبيه متابعة، وقت آخر تعديل)
+--    1ب) sessions        جلسات الشكوى؛ أحدث جلسة تُرحِّل المحال إليه والنتيجة والحالة إلى الشكوى
 --    2) access_passwords كلمات المرور: أدمن / إدارة (التقارير) / مشتكي (خاصة، 4 أرقام، مرة واحدة)
 --    3) app_settings     الإعدادات: وضع دخول المشتكين وكلمة المرور العامة
 --
@@ -32,6 +33,8 @@
 --    2026-09-24  صفحة كلمة المرور تبقى أولاً مع زر «تقديم شكوى مباشرة» يتحكم الأدمن بإظهاره
 --                (direct_enabled)؛ إلغاء الوضع open. إضافة رقم التواصل إلى نموذج الشكوى.
 --    2026-09-27  حذف سجل المحاولات (جدول login_attempts والدالتين request_ip و log_attempt) بطلب الإدارة.
+--    2026-09-29  جدول الجلسات (sessions): رقم الشكوى، التاريخ والوقت، المحال إليه، نتيجة الجلسة، الحالة؛
+--                أحدث جلسة تُرحِّل المحال إليه والنتيجة والحالة إلى جدول الشكاوى (مشغّل sessions_after_insert).
 -- =====================================================================
 
 -- ---------------------------------------------------------------------
@@ -93,6 +96,11 @@ drop function if exists public.track_by_tokens(uuid[]);
 drop function if exists public.complaint_stats(timestamptz, timestamptz);
 drop function if exists public.verify_password(text, text);
 drop function if exists public.random_password(int, boolean);
+drop table if exists public.sessions cascade;
+drop function if exists public.sessions_after_insert() cascade;
+drop function if exists public.admin_list_sessions(text, uuid);
+drop function if exists public.admin_add_session(text, uuid, timestamptz, text, text, text);
+drop function if exists public.admin_delete_session(text, uuid);
 drop function if exists public.setting(text);
 
 -- تفعيل pgcrypto لتوليد أرقام عشوائية آمنة
@@ -130,6 +138,24 @@ create table public.complaints (
 -- فهارس: التقارير حسب التاريخ، وقائمة «المطلوب»
 create index complaints_received_date_idx on public.complaints (received_date);
 create index complaints_reminder_at_idx on public.complaints (reminder_at) where reminder_at is not null;
+
+-- ---------------------------------------------------------------------
+-- 1ب) جدول الجلسات: كل جلسة لشكوى، وآخر جلسة تُرحِّل المحال إليه والنتيجة والحالة إلى الشكوى
+-- ---------------------------------------------------------------------
+-- جدول الجلسات (يُحذف مع شكواه)
+create table public.sessions (
+  id            uuid primary key default gen_random_uuid(),
+  complaint_id  uuid not null references public.complaints (id) on delete cascade,  -- الشكوى (ومنها رقمها)
+  session_at    timestamptz not null default now(),       -- تاريخ ووقت الجلسة
+  referred_to   text,                                     -- ترحيل / مُحالة إلى
+  result        text,                                     -- نتيجة الجلسة
+  status        text not null                             -- حالة الشكوى بعد الجلسة
+                check (status in ('جديد', 'قيد المراجعة', 'جاري المتابعة', 'مغلقة')),
+  created_at    timestamptz not null default now()
+);
+
+-- فهرس لتسريع جلب جلسات شكوى معيّنة بالترتيب الزمني
+create index sessions_complaint_idx on public.sessions (complaint_id, session_at desc);
 
 -- ---------------------------------------------------------------------
 -- 2) جدول كلمات المرور (أدمن / إدارة / مشتكي)
@@ -296,6 +322,30 @@ create trigger trg_complaints_before_update
   before update on public.complaints
   for each row execute function public.complaints_before_update();
 
+-- بعد إضافة جلسة: ترحيل المحال إليه ونتيجة الجلسة وحالة الشكوى إلى جدول الشكاوى الرئيسي
+-- (فقط إن كانت أحدث جلسة للشكوى؛ الحقل الفارغ في الجلسة لا يمسح قيمة الشكوى؛
+--  وعند «مغلقة» يصبح تاريخ الإغلاق هو تاريخ الجلسة)
+create function public.sessions_after_insert()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if exists (select 1 from public.sessions s
+             where s.complaint_id = new.complaint_id and s.session_at > new.session_at and s.id <> new.id) then
+    return new;
+  end if;
+  update public.complaints set
+    status      = new.status,
+    referred_to = coalesce(nullif(btrim(new.referred_to), ''), referred_to),
+    result      = coalesce(nullif(btrim(new.result), ''), result),
+    closed_date = case when new.status = 'مغلقة' then new.session_at end
+  where id = new.complaint_id;
+  return new;
+end $$;
+
+-- ربطها بجدول الجلسات بعد كل إضافة
+create trigger trg_sessions_after_insert
+  after insert on public.sessions
+  for each row execute function public.sessions_after_insert();
+
 -- ---------------------------------------------------------------------
 -- 7) الصلاحيات: لا وصول مباشر للجداول من الموقع
 -- ---------------------------------------------------------------------
@@ -303,9 +353,10 @@ create trigger trg_complaints_before_update
 alter table public.complaints       enable row level security;
 alter table public.access_passwords enable row level security;
 alter table public.app_settings     enable row level security;
+alter table public.sessions         enable row level security;
 
 -- سحب أي صلاحية مباشرة من الموقع
-revoke all on public.complaints, public.access_passwords, public.app_settings
+revoke all on public.complaints, public.access_passwords, public.app_settings, public.sessions
   from anon, authenticated;
 
 -- ---------------------------------------------------------------------
@@ -612,7 +663,57 @@ begin
   return found;
 end $$;
 
+-- قائمة الجلسات: لشكوى معيّنة (p_complaint_id)، أو كل الجلسات إن كان فارغاً (الأحدث أولاً)
+create function public.admin_list_sessions(p_secret text, p_complaint_id uuid)
+returns table (id uuid, complaint_id uuid, complaint_number text, complainant_name text,
+               session_at timestamptz, referred_to text, result text, status text)
+language plpgsql security definer set search_path = public as $$
+begin
+  if public.verify_password('أدمن', p_secret) is null then
+    return;
+  end if;
+  return query
+    select s.id, s.complaint_id, c.complaint_number, c.complainant_name,
+           s.session_at, s.referred_to, s.result, s.status
+    from public.sessions s
+    join public.complaints c on c.id = s.complaint_id
+    where p_complaint_id is null or s.complaint_id = p_complaint_id
+    order by s.session_at desc
+    limit 2000;
+end $$;
+
+-- إضافة جلسة لشكوى؛ المشغّل يرحّل قيمها إلى الشكوى؛ تُرجع الشكوى بعد التحديث
+create function public.admin_add_session(
+  p_secret text, p_complaint_id uuid, p_session_at timestamptz,
+  p_referred_to text, p_result text, p_status text
+) returns setof public.complaints
+language plpgsql security definer set search_path = public as $$
+begin
+  if public.verify_password('أدمن', p_secret) is null then
+    return;
+  end if;
+  insert into public.sessions (complaint_id, session_at, referred_to, result, status)
+  values (p_complaint_id, coalesce(p_session_at, now()),
+          nullif(btrim(left(p_referred_to, 200)), ''), nullif(btrim(left(p_result, 2000)), ''), p_status);
+  return query select * from public.complaints where id = p_complaint_id;
+end $$;
+
+-- حذف جلسة سُجّلت بالخطأ (لا يُرجع قيم الشكوى السابقة؛ تُعدَّل الشكوى يدوياً إن لزم)
+create function public.admin_delete_session(p_secret text, p_id uuid)
+returns boolean
+language plpgsql security definer set search_path = public as $$
+begin
+  if public.verify_password('أدمن', p_secret) is null then
+    return false;
+  end if;
+  delete from public.sessions where id = p_id;
+  return found;
+end $$;
+
 -- السماح للموقع باستدعاء دوال الأدمن (محمية بكلمة مرور الأدمن داخلها)
+grant execute on function public.admin_list_sessions(text, uuid)           to anon, authenticated;
+grant execute on function public.admin_add_session(text, uuid, timestamptz, text, text, text) to anon, authenticated;
+grant execute on function public.admin_delete_session(text, uuid)          to anon, authenticated;
 grant execute on function public.admin_login(text)                         to anon, authenticated;
 grant execute on function public.admin_list_complaints(text)               to anon, authenticated;
 grant execute on function public.admin_update_complaint(text, uuid, text, text, text, text, timestamptz, timestamptz, text) to anon, authenticated;
