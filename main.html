@@ -50,6 +50,8 @@
                 سجل الإحالة)، وتصدير الجدول الظاهر، وتصدير التقرير؛ مكتبة SheetJS تُحمَّل عند أول تصدير فقط.
     2026-09-29  نموذج الشكوى: عنوان الاعتراض، رقم الهاتف للاتصال (إلزامي)، رقم واتس/تلغرام (اختياري)،
                 حذف 00 من بداية الأرقام، وزر 🎤 لتحويل الكلام إلى نص؛ الحقول الجديدة في الجدول والتقارير والتصدير.
+    2026-09-29  ثلاث نتائج (نتيجة الشكوى الداخلية، ما يراه المشتكي، ما يراه المعترض) — الجلسات تُرحِّل إلى
+                الداخلية فقط؛ الجلسات تُعدَّل ولا تُحذف؛ فتح شكوى من «المطلوب» يطلب تحديد التنبيه القادم والمطلوب عنده.
 =======================================================================
 -->
 <html lang="ar" dir="rtl">
@@ -279,6 +281,9 @@
   .detail-grid dt { color: var(--muted); font-size: 13px; }
   .detail-grid dd { margin: 2px 0 0; font-weight: 700; overflow-wrap: anywhere; }
 
+  /* مربع «حدّد موعد التنبيه القادم» عند فتح الشكوى من «المطلوب» */
+  .due-prompt { background: #fff4e6; border: 2px solid #f3c99a; border-radius: 12px; padding: 12px; margin-bottom: 14px; }
+
   /* عنوان الاعتراض في نافذة الشكوى */
   .c-title { font-weight: 800; font-size: 16px; margin-top: 10px; }
 
@@ -475,10 +480,11 @@ async function exportAllToExcel(secret, complaints) {
   await saveWorkbook([
     { name: "الشكاوى",
       headers: ["رقم الشكوى", "تاريخ الشكوى", "الحالة", "عنوان الاعتراض", "المشتكي", "رقم الهاتف", "واتس / تلغرام", "المشتكى عليه",
-                "نص الشكوى", "التصنيف", "مُحالة إلى", "النتيجة", "تاريخ الإغلاق", "رمز المتابعة", "تنبيه المتابعة", "المطلوب عند التنبيه",
+                "نص الشكوى", "التصنيف", "مُحالة إلى", "نتيجة الشكوى", "النتيجة للمشتكي", "النتيجة للمعترض", "تاريخ الإغلاق", "رمز المتابعة", "تنبيه المتابعة", "المطلوب عند التنبيه",
                 "ملخص للمشتكى عليه", "آخر موعد للاعتراض", "نص الاعتراض", "تاريخ الاعتراض", "آخر تعديل"],
       rows: complaints.map(c => [c.complaint_number, xlDate(c.received_date), c.status, c.title, c.complainant_name, c.phone_number,
-                c.contact_number, c.accused_name, c.subject, c.classification, c.referred_to, c.result, xlDate(c.closed_date), c.tracking_code,
+                c.contact_number, c.accused_name, c.subject, c.classification, c.referred_to, c.result, c.complainant_result, c.accused_result,
+                xlDate(c.closed_date), c.tracking_code,
                 xlDate(c.reminder_at), c.reminder_note, c.objection_summary, xlDate(c.objection_deadline), c.objection_text,
                 xlDate(c.objection_at), xlDate(c.updated_at)]) },
     { name: "الجلسات",
@@ -927,6 +933,7 @@ function ObjectionPage() {
             </div>
             <div className="field-label">ملخص الشكوى</div>
             <div className="subject">{view.summary}</div>
+            {view.result && <><div className="field-label">نتيجة الشكوى</div><div className="subject">{view.result}</div></>}
             {view.deadline && !view.objection_at && (
               <div className={`deadline ${new Date(view.deadline) < new Date() ? "over" : ""}`} style={{ marginBottom: 0 }}>
                 ⏳ آخر موعد للاعتراض: <b>{fmtDateTime(view.deadline)}</b>
@@ -1054,7 +1061,9 @@ function AdminPage({ secret }) {
   const [rows, setRows] = useState(null);
   const [error, setError] = useState("");
   const [openId, setOpenId] = useState(null);
+  const [openFromDue, setOpenFromDue] = useState(false);   // فُتحت من «المطلوب» ← طلب تحديد التنبيه القادم
   const [sessVer, setSessVer] = useState(0);
+  const openComplaint = (c, fromDue = false) => { setOpenFromDue(fromDue); setOpenId(c.id); };
 
   // جلب كل الشكاوى
   const load = useCallback(async () => {
@@ -1089,16 +1098,16 @@ function AdminPage({ secret }) {
         <button className={tab === "viewers" ? "active" : ""} onClick={() => setTab("viewers")}>📊 كلمات مرور الإدارة</button>
       </div>
       {error && <Alert type="error">{error}</Alert>}
-      {tab === "today" && <AdminDue secret={secret} rows={rows} onSaved={onSaved} reload={reload} onOpen={c => setOpenId(c.id)} />}
-      {tab === "complaints" && <AdminComplaints secret={secret} rows={rows} onSaved={onSaved} reload={reload} onOpen={c => setOpenId(c.id)} />}
-      {tab === "sessions" && <AdminSessions secret={secret} version={sessVer} onOpen={c => setOpenId(c.id)} />}
+      {tab === "today" && <AdminDue secret={secret} rows={rows} onSaved={onSaved} reload={reload} onOpen={c => openComplaint(c, true)} />}
+      {tab === "complaints" && <AdminComplaints secret={secret} rows={rows} onSaved={onSaved} reload={reload} onOpen={c => openComplaint(c)} />}
+      {tab === "sessions" && <AdminSessions secret={secret} version={sessVer} onOpen={c => openComplaint(c)} />}
       {tab === "access" && <AdminAccess secret={secret} />}
       {tab === "viewers" && <AdminViewers secret={secret} />}
       {opened && (
         <div className="modal-back" onClick={() => setOpenId(null)}>
           <div className="modal" onClick={e => e.stopPropagation()}>
             <div className="modal-close"><button className="btn secondary sm" onClick={() => setOpenId(null)}>✕ إغلاق</button></div>
-            <ComplaintCard key={opened.id} secret={secret} complaint={opened} onSaved={onSaved} onSessionsChanged={() => setSessVer(n => n + 1)} />
+            <ComplaintCard key={opened.id} secret={secret} complaint={opened} onSaved={onSaved} onSessionsChanged={() => setSessVer(n => n + 1)} fromDue={openFromDue} />
           </div>
         </div>
       )}
@@ -1124,14 +1133,16 @@ const COLUMNS = [
   { key: "class", label: "التصنيف", sort: c => c.classification, text: c => c.classification, cell: c => muted(c.classification) },
   { key: "referred", label: "مُحالة إلى", sort: c => c.referred_to, text: c => c.referred_to, cell: c => muted(c.referred_to) },
   { key: "status", label: "الحالة", sort: c => STATUSES.indexOf(c.status), text: c => c.status, cell: c => <StatusBadge value={c.status} /> },
-  { key: "result", label: "النتيجة", sort: c => c.result, text: c => c.result, wrap: true, cell: c => c.result ? <span className="clip">{c.result}</span> : muted() },
+  { key: "result", label: "نتيجة الشكوى", sort: c => c.result, text: c => c.result, wrap: true, cell: c => c.result ? <span className="clip">{c.result}</span> : muted() },
+  { key: "cresult", label: "نتيجة المشتكي", sort: c => c.complainant_result, text: c => c.complainant_result, wrap: true, cell: c => c.complainant_result ? <span className="clip">{c.complainant_result}</span> : muted() },
+  { key: "aresult", label: "نتيجة المعترض", sort: c => c.accused_result, text: c => c.accused_result, wrap: true, cell: c => c.accused_result ? <span className="clip">{c.accused_result}</span> : muted() },
   { key: "closed", label: "تاريخ الإغلاق", sort: c => c.closed_date ? new Date(c.closed_date).getTime() : null, text: c => xlDate(c.closed_date), cell: c => c.closed_date ? fmtDate(c.closed_date) : muted() },
   { key: "tracking", label: "رمز المتابعة", sort: c => c.tracking_code, text: c => c.tracking_code, cell: c => <span dir="ltr">{c.tracking_code || "—"}</span> },
   { key: "objection", label: "الاعتراض", sort: c => c.objection_at ? new Date(c.objection_at).getTime() : null, text: c => c.objection_text || "",
     cell: c => c.objection_at ? <span className="badge st-review">⚖️ {fmtDate(c.objection_at)}</span> : c.objection_code ? <span className="muted">بانتظار الاعتراض</span> : muted() },
 ];
 // الأعمدة المخفية افتراضياً (يمكن إظهارها من قائمة الأعمدة)
-const DEFAULT_HIDDEN = ["result", "tracking", "objection"];
+const DEFAULT_HIDDEN = ["result", "cresult", "aresult", "tracking", "objection"];
 
 // تفضيلات الجدول المحفوظة على الجهاز: الأعمدة المخفية، حجم الخط، عدد الأسطر
 function usePref(key, initial) {
@@ -1407,14 +1418,17 @@ function AdminComplaints({ secret, rows, onSaved, reload, onOpen }) {
   );
 }
 
-// تفاصيل شكوى واحدة (في النافذة): البيانات + التصنيف، الترحيل، الحالة، النتيجة، الإغلاق، التنبيه، والجلسات
-function ComplaintCard({ secret, complaint: c, onSaved, onSessionsChanged }) {
+// تفاصيل شكوى واحدة (في النافذة): البيانات + التصنيف، الترحيل، الحالة، النتائج الثلاث، الإغلاق، التنبيه،
+// والاعتراض والجلسات والسجل. fromDue: فُتحت من «المطلوب» فيظهر في أعلاها طلب تحديد التنبيه القادم
+function ComplaintCard({ secret, complaint: c, onSaved, onSessionsChanged, fromDue }) {
   // القيم القابلة للتعديل وحالة الحفظ
   const [v, setV] = useState({
     classification: c.classification || "",
     referred_to: c.referred_to || "",
     status: c.status,
     result: c.result || "",
+    complainant_result: c.complainant_result || "",
+    accused_result: c.accused_result || "",
     closed: c.closed_date ? toDateInput(new Date(c.closed_date)) : "",
     reminder: toDateTimeInput(c.reminder_at),
     reminder_note: c.reminder_note || "",
@@ -1443,7 +1457,7 @@ function ComplaintCard({ secret, complaint: c, onSaved, onSessionsChanged }) {
     setBusy(true); setMsg(null);
     const { data, error } = await sb.rpc("admin_update_complaint", {
       p_secret: secret, p_id: c.id, p_classification: v.classification, p_referred_to: v.referred_to,
-      p_status: v.status, p_result: v.result,
+      p_status: v.status, p_result: v.result, p_complainant_result: v.complainant_result, p_accused_result: v.accused_result,
       p_closed_date: v.status === CLOSED ? dateInputToIso(v.closed || toDateInput(new Date())) : null,
       p_reminder_at: dateTimeInputToIso(v.reminder), p_reminder_note: v.reminder_note,
     });
@@ -1451,6 +1465,15 @@ function ComplaintCard({ secret, complaint: c, onSaved, onSessionsChanged }) {
     if (error || !data || !data.length) return setMsg({ type: "error", text: "تعذّر الحفظ، يرجى المحاولة مرة أخرى." });
     onSaved(data[0]);
     setMsg({ type: "ok", text: "تم الحفظ." });
+  }
+
+  // حفظ التنبيه القادم من مربع «المطلوب»: التاريخ والمطلوب إلزاميان (إلا إن كانت الشكوى ستُغلق)
+  function saveReminder() {
+    if (v.status !== CLOSED && (!v.reminder || !v.reminder_note.trim()))
+      return setMsg({ type: "error", text: "حدّد تاريخ ووقت التنبيه القادم، واكتب المطلوب عنده." });
+    if (v.reminder && new Date(v.reminder) <= new Date() && v.status !== CLOSED)
+      return setMsg({ type: "error", text: "موعد التنبيه القادم يجب أن يكون في المستقبل." });
+    save();
   }
 
   // بعد إضافة جلسة: تحديث الشكوى في القائمة وتحديث الحقول المعروضة بالقيم المرحَّلة
@@ -1487,6 +1510,22 @@ function ComplaintCard({ secret, complaint: c, onSaved, onSessionsChanged }) {
       {c.title && <div className="c-title">📝 {c.title}</div>}
       <div className="subject">{c.subject}</div>
       {msg && <Alert type={msg.type}>{msg.text}</Alert>}
+      {fromDue && (
+        <div className="due-prompt">
+          <b>⏰ حدّد موعد التنبيه القادم والمطلوب عنده</b>
+          <small className="muted" style={{ display: "block", marginBottom: 10 }}>حتى تعود هذه الشكوى إلى «المطلوب» في موعدها ولا تُنسى. إن كانت ستُغلق فاختر الحالة «مغلقة» في الأسفل.</small>
+          <div className="grid">
+            <Field label="تاريخ ووقت التنبيه" required>
+              <div className="row" style={{ flexWrap: "nowrap" }}>
+                <input type="datetime-local" value={v.reminder} onChange={set("reminder")} />
+                {v.reminder && <button type="button" className="btn danger-text" onClick={() => setV(x => ({ ...x, reminder: "", reminder_note: "" }))}>مسح</button>}
+              </div>
+            </Field>
+            <Field label="المطلوب عند التنبيه" required><input type="text" value={v.reminder_note} onChange={set("reminder_note")} maxLength={500} placeholder="مثال: الاتصال بمسؤول السكن" /></Field>
+          </div>
+          <button type="button" className="btn gold block" style={{ marginTop: 10 }} disabled={busy} onClick={saveReminder}>{busy ? "جارٍ الحفظ…" : "حفظ التنبيه والتعديلات"}</button>
+        </div>
+      )}
       <div className="grid">
         <Field label="التصنيف">
           <select value={v.classification} onChange={set("classification")}>
@@ -1502,14 +1541,26 @@ function ComplaintCard({ secret, complaint: c, onSaved, onSessionsChanged }) {
         <Field label="تاريخ الإغلاق" hint="اختيار تاريخ يجعل الحالة «مغلقة»">
           <input type="date" value={v.closed} onChange={onClosedDate} />
         </Field>
-        <Field label="⏰ تنبيه يدوي (اختياري)" hint="يظهر في «المطلوب» في يومه">
-          <div className="row" style={{ flexWrap: "nowrap" }}>
-            <input type="datetime-local" value={v.reminder} onChange={set("reminder")} />
-            {v.reminder && <button type="button" className="btn danger-text" onClick={() => setV(x => ({ ...x, reminder: "", reminder_note: "" }))}>مسح</button>}
-          </div>
+        {!fromDue && (
+          <>
+            <Field label="⏰ تنبيه يدوي (اختياري)" hint="يظهر في «المطلوب» في يومه">
+              <div className="row" style={{ flexWrap: "nowrap" }}>
+                <input type="datetime-local" value={v.reminder} onChange={set("reminder")} />
+                {v.reminder && <button type="button" className="btn danger-text" onClick={() => setV(x => ({ ...x, reminder: "", reminder_note: "" }))}>مسح</button>}
+              </div>
+            </Field>
+            <Field label="المطلوب عند التنبيه"><input type="text" value={v.reminder_note} onChange={set("reminder_note")} maxLength={500} placeholder="مثال: الاتصال بمسؤول السكن" /></Field>
+          </>
+        )}
+        <Field label="📋 نتيجة الشكوى" hint="داخلية: للأدمن والإدارة فقط؛ نتيجة آخر جلسة تنتقل إليها" full>
+          <textarea style={{ minHeight: 70 }} value={v.result} onChange={set("result")} maxLength={2000} />
         </Field>
-        <Field label="المطلوب عند التنبيه"><input type="text" value={v.reminder_note} onChange={set("reminder_note")} maxLength={500} placeholder="مثال: الاتصال بمسؤول السكن" /></Field>
-        <Field label="النتيجة (يراها المشتكي)" full><textarea style={{ minHeight: 80 }} value={v.result} onChange={set("result")} maxLength={2000} /></Field>
+        <Field label="👤 النتيجة التي يراها المشتكي" hint="تظهر للمشتكي في صفحة «نتيجة الشكوى» — لا تأتي من الجلسات" full>
+          <textarea style={{ minHeight: 70 }} value={v.complainant_result} onChange={set("complainant_result")} maxLength={2000} />
+        </Field>
+        <Field label="⚖️ النتيجة التي يراها المعترض" hint="تظهر للمشتكى عليه في صفحة الاعتراض — لا تأتي من الجلسات" full>
+          <textarea style={{ minHeight: 70 }} value={v.accused_result} onChange={set("accused_result")} maxLength={2000} />
+        </Field>
       </div>
       <button className="btn block" style={{ marginTop: 14 }} disabled={busy} onClick={save}>{busy ? "جارٍ الحفظ…" : "حفظ"}</button>
       <ObjectionSection secret={secret} complaint={c} onSaved={onSaved} />
@@ -1690,14 +1741,16 @@ function Timeline({ rows }) {
 // ---------------------------------------------------------------------
 // الجلسات
 // ---------------------------------------------------------------------
-// قسم الجلسات داخل تفاصيل الشكوى: سجل جلساتها + إضافة جلسة تُرحَّل قيمها إلى الشكوى
+// قسم الجلسات داخل تفاصيل الشكوى: سجل جلساتها + إضافة جلسة أو تعديلها (لا حذف)؛
+// قيم أحدث جلسة تُرحَّل إلى الشكوى، والنتيجة إلى «نتيجة الشكوى» الداخلية فقط
 function SessionsSection({ secret, complaint, onApplied, onChanged }) {
-  // سجل الجلسات، نموذج الجلسة الجديدة (يبدأ بالوقت الحالي وقيم الشكوى الحالية)، والرسائل
+  // سجل الجلسات، النموذج (جلسة جديدة أو تعديل جلسة: editId)، والرسائل
+  const blank = () => ({ at: toDateTimeInput(new Date()), referred_to: complaint.referred_to || "", result: "", status: complaint.status });
   const [list, setList] = useState(null);
-  const [form, setForm] = useState(() => ({ at: toDateTimeInput(new Date()), referred_to: complaint.referred_to || "", result: "", status: complaint.status }));
+  const [form, setForm] = useState(blank);
+  const [editId, setEditId] = useState(null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null);
-  const [confirmDel, setConfirmDel] = useState(null);
   const set = key => e => { setForm(f => ({ ...f, [key]: e.target.value })); setMsg(null); };
 
   // جلب جلسات هذه الشكوى
@@ -1708,31 +1761,34 @@ function SessionsSection({ secret, complaint, onApplied, onChanged }) {
   }, [secret, complaint.id]);
   useEffect(() => { load(); }, [load]);
 
-  // إضافة الجلسة عبر admin_add_session؛ قاعدة البيانات ترحّل قيمها إلى الشكوى إن كانت أحدث جلسة
-  async function add(e) {
+  // بدء تعديل جلسة: تعبئة النموذج بقيمها
+  function startEdit(s) {
+    setEditId(s.id);
+    setForm({ at: toDateTimeInput(s.session_at), referred_to: s.referred_to || "", result: s.result || "", status: s.status });
+    setMsg(null);
+  }
+
+  // إلغاء التعديل والعودة لنموذج جلسة جديدة
+  function cancelEdit() { setEditId(null); setForm(blank()); setMsg(null); }
+
+  // حفظ: إضافة جلسة (admin_add_session) أو تعديلها (admin_update_session)؛ تُرجع الشكوى بعد الترحيل
+  async function submit(e) {
     e.preventDefault();
     if (!form.at) return setMsg({ type: "error", text: "حدّد تاريخ ووقت الجلسة." });
     setBusy(true); setMsg(null);
-    const { data, error } = await sb.rpc("admin_add_session", {
-      p_secret: secret, p_complaint_id: complaint.id, p_session_at: dateTimeInputToIso(form.at),
-      p_referred_to: form.referred_to, p_result: form.result, p_status: form.status,
-    });
+    const args = { p_secret: secret, p_session_at: dateTimeInputToIso(form.at), p_referred_to: form.referred_to, p_result: form.result, p_status: form.status };
+    const { data, error } = editId
+      ? await sb.rpc("admin_update_session", { ...args, p_id: editId })
+      : await sb.rpc("admin_add_session", { ...args, p_complaint_id: complaint.id });
     setBusy(false);
-    if (error || !data || !data.length) return setMsg({ type: "error", text: "تعذّر إضافة الجلسة، يرجى المحاولة مرة أخرى." });
+    if (error || !data || !data.length) return setMsg({ type: "error", text: editId ? "تعذّر تعديل الجلسة، يرجى المحاولة مرة أخرى." : "تعذّر إضافة الجلسة، يرجى المحاولة مرة أخرى." });
     onApplied(data[0]);
-    setForm(f => ({ ...f, at: toDateTimeInput(new Date()), result: "" }));
-    setMsg({ type: "ok", text: "تمت إضافة الجلسة، ورُحِّل المحال إليه والنتيجة والحالة إلى الشكوى (إن كانت أحدث جلسة)." });
+    setMsg({ type: "ok", text: editId ? "تم تعديل الجلسة وتسجيل التعديل في سجل الشكوى." : "تمت إضافة الجلسة، ورُحِّل المحال إليه ونتيجة الجلسة والحالة إلى الشكوى (إن كانت أحدث جلسة)." });
+    setEditId(null); setForm(blank());
     load(); onChanged();
   }
 
-  // حذف جلسة سُجّلت بالخطأ (بعد تأكيد)
-  async function remove(id) {
-    setConfirmDel(null);
-    const { data } = await sb.rpc("admin_delete_session", { p_secret: secret, p_id: id });
-    if (data) { load(); onChanged(); setMsg({ type: "ok", text: "حُذفت الجلسة. قيم الشكوى لم تتغيّر؛ عدّلها من الأعلى إن لزم." }); }
-  }
-
-  // العرض: عنوان القسم، سجل الجلسات، ثم نموذج جلسة جديدة
+  // العرض: عنوان القسم، سجل الجلسات (مع زر تعديل)، ثم النموذج
   return (
     <div className="sessions">
       <h3>🗓️ الجلسات {list && `(${list.length})`}</h3>
@@ -1743,24 +1799,20 @@ function SessionsSection({ secret, complaint, onApplied, onChanged }) {
             <thead><tr><th>التاريخ والوقت</th><th>ترحيل / مُحالة إلى</th><th>نتيجة الجلسة</th><th>حالة الشكوى</th><th></th></tr></thead>
             <tbody>
               {list.map(s => (
-                <tr key={s.id} className={`status-row ${stClass(s.status)}`} style={{ cursor: "default" }}>
+                <tr key={s.id} className={`status-row ${stClass(s.status)} ${editId === s.id ? "selected" : ""}`} style={{ cursor: "default" }}>
                   <td>{fmtDateTime(s.session_at)}</td>
                   <td>{s.referred_to || <span className="muted">—</span>}</td>
                   <td className="wrap">{s.result || <span className="muted">—</span>}</td>
                   <td><StatusBadge value={s.status} /></td>
-                  <td>
-                    {confirmDel === s.id
-                      ? <><button className="btn danger-text" onClick={() => remove(s.id)}>تأكيد الحذف</button><button className="btn danger-text" style={{ color: "var(--muted)" }} onClick={() => setConfirmDel(null)}>تراجع</button></>
-                      : <button className="btn danger-text" onClick={() => setConfirmDel(s.id)}>حذف</button>}
-                  </td>
+                  <td><button className="btn danger-text" style={{ color: "var(--brand)" }} onClick={() => startEdit(s)}>✏️ تعديل</button></td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
       )}
-      <form onSubmit={add} className="session-form">
-        <div className="field-label" style={{ marginBottom: 8 }}>➕ جلسة جديدة</div>
+      <form onSubmit={submit} className="session-form">
+        <div className="field-label" style={{ marginBottom: 8 }}>{editId ? "✏️ تعديل الجلسة" : "➕ جلسة جديدة"}</div>
         <div className="grid">
           <Field label="التاريخ والوقت" required><input type="datetime-local" value={form.at} onChange={set("at")} /></Field>
           <Field label="ترحيل / مُحالة إلى"><input type="text" value={form.referred_to} onChange={set("referred_to")} maxLength={200} placeholder="الجهة أو الشخص" /></Field>
@@ -1769,8 +1821,17 @@ function SessionsSection({ secret, complaint, onApplied, onChanged }) {
           </Field>
           <Field label="نتيجة الجلسة" full><textarea style={{ minHeight: 70 }} value={form.result} onChange={set("result")} maxLength={2000} /></Field>
         </div>
-        <button className="btn gold block" style={{ marginTop: 12 }} disabled={busy}>{busy ? "جارٍ الإضافة…" : "إضافة الجلسة وترحيلها إلى الشكوى"}</button>
-        <small className="hint" style={{ display: "block", marginTop: 6 }}>المحال إليه ونتيجة الجلسة وحالتها تنتقل إلى الشكوى تلقائياً؛ الحقل الفارغ لا يمسح قيمة الشكوى.</small>
+        {editId ? (
+          <div className="grid" style={{ gridTemplateColumns: "1fr 1fr", marginTop: 12 }}>
+            <button className="btn gold" disabled={busy}>{busy ? "جارٍ الحفظ…" : "حفظ التعديل"}</button>
+            <button type="button" className="btn secondary" onClick={cancelEdit}>إلغاء التعديل</button>
+          </div>
+        ) : (
+          <button className="btn gold block" style={{ marginTop: 12 }} disabled={busy}>{busy ? "جارٍ الإضافة…" : "إضافة الجلسة وترحيلها إلى الشكوى"}</button>
+        )}
+        <small className="hint" style={{ display: "block", marginTop: 6 }}>
+          المحال إليه والحالة ونتيجة الجلسة تنتقل إلى الشكوى تلقائياً (النتيجة إلى «نتيجة الشكوى» الداخلية فقط، لا إلى ما يراه المشتكي أو المعترض)؛ الحقل الفارغ لا يمسح قيمة الشكوى. الجلسات لا تُحذف، ويُسجَّل كل تعديل في سجل الشكوى.
+        </small>
       </form>
     </div>
   );
@@ -2297,8 +2358,12 @@ function ReportCard({ code, number, onClose }) {
             {c.title && <div className="c-title" style={{ marginTop: 0, marginBottom: 8 }}>📝 {c.title}</div>}
             <div className="field-label">نص الشكوى</div>
             <div className="subject">{c.subject}</div>
-            <div className="field-label">النتيجة</div>
+            <div className="field-label">📋 نتيجة الشكوى</div>
             <div className="subject">{c.result || <span className="muted">لم تصدر بعد</span>}</div>
+            <div className="field-label">👤 النتيجة التي يراها المشتكي</div>
+            <div className="subject">{c.complainant_result || <span className="muted">—</span>}</div>
+            <div className="field-label">⚖️ النتيجة التي يراها المعترض</div>
+            <div className="subject">{c.accused_result || <span className="muted">—</span>}</div>
             {c.objection_at && (
               <div className="sessions">
                 <h3>⚖️ اعتراض المشتكى عليه</h3>
