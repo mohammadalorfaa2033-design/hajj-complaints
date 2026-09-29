@@ -42,6 +42,7 @@
 --                (objection_deadline) مع تمديد استثنائي بسبب إلزامي؛ الاعتراض بعد المهلة يُرفض (EXPIRED).
 --    2026-09-29  القسم 10ب: بطاقة الشكوى في التقارير للاطلاع فقط (تفاصيل + جلسات + سجل)، يتحكم الأدمن
 --                بإظهارها عبر الإعداد report_card_enabled.
+--    2026-09-29  admin_export_log: سجل كل الشكاوى للتصدير إلى ملف Excel.
 -- =====================================================================
 
 -- ---------------------------------------------------------------------
@@ -120,6 +121,7 @@ drop function if exists public.sessions_after_delete() cascade;
 drop function if exists public.log_complaint(uuid, text, text, text, text, text, text);
 drop function if exists public.fmt_ts(timestamptz);
 drop table if exists public.complaint_log cascade;
+drop function if exists public.admin_export_log(text);
 drop function if exists public.viewer_card_enabled(text);
 drop function if exists public.viewer_complaint_card(text, text);
 drop function if exists public.admin_get_report_card(text);
@@ -1143,6 +1145,23 @@ begin
     where l.complaint_id = p_complaint_id
     order by l.at desc, l.id desc;
 end $$;
+
+-- سجل كل الشكاوى للتصدير إلى Excel (مع رقم كل شكوى)، الأحدث أولاً
+create or replace function public.admin_export_log(p_secret text)
+returns table (complaint_number text, at timestamptz, event text, field text, old_value text, new_value text,
+               actor text, source text, note text)
+language plpgsql security definer set search_path = public as $$
+begin
+  if public.verify_password('أدمن', p_secret) is null then
+    return;
+  end if;
+  return query
+    select c.complaint_number, l.at, l.event, l.field, l.old_value, l.new_value, l.actor, l.source, l.note
+    from public.complaint_log l
+    join public.complaints c on c.id = l.complaint_id
+    order by l.at desc, l.id desc;
+end $$;
+grant execute on function public.admin_export_log(text) to anon, authenticated;
 
 -- توليد رمز الاعتراض مع الملخص وآخر موعد للاعتراض (الافتراضي بعد 3 أيام)
 drop function if exists public.admin_set_objection_code(text, uuid, text);

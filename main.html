@@ -46,6 +46,8 @@
                 بسبب إلزامي؛ صفحة الاعتراض تعرض آخر موعد وترفض بعده.
     2026-09-29  بطاقة الشكوى في التقارير للاطلاع فقط (تفاصيل + اعتراض + جلسات + سجل)، مع مفتاح في تبويب
                 «كلمات مرور الإدارة» لإظهارها أو إخفائها.
+    2026-09-29  التصدير إلى Excel ‎.xlsx (بدل CSV): تصدير كامل بأربع أوراق (الشكاوى، الجلسات، سجل الشكاوى،
+                سجل الإحالة)، وتصدير الجدول الظاهر، وتصدير التقرير؛ مكتبة SheetJS تُحمَّل عند أول تصدير فقط.
 =======================================================================
 -->
 <html lang="ar" dir="rtl">
@@ -419,6 +421,68 @@ const siteUrl = () => location.href.split("#")[0];
 
 // نسخ نص إلى الحافظة؛ تُرجع true عند النجاح
 async function copyText(text) { try { await navigator.clipboard.writeText(text); return true; } catch { return false; } }
+
+// ---------------------------------------------------------------------
+// التصدير إلى Excel (‎.xlsx): مكتبة SheetJS تُحمَّل فقط عند أول تصدير (حجمها كبير، فلا تُبطئ الصفحة)
+// ---------------------------------------------------------------------
+let xlsxPromise = null;
+function loadXLSX() {
+  if (window.XLSX) return Promise.resolve(window.XLSX);
+  if (!xlsxPromise) xlsxPromise = new Promise((resolve, reject) => {
+    const s = document.createElement("script");
+    s.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
+    s.onload = () => resolve(window.XLSX);
+    s.onerror = () => { xlsxPromise = null; reject(new Error("تعذّر تحميل أداة Excel")); };
+    document.head.appendChild(s);
+  });
+  return xlsxPromise;
+}
+
+// تاريخ ووقت بصيغة قابلة للفرز في Excel: 2026-09-29 14:30
+const xlDate = v => { if (!v) return ""; const d = new Date(v); return `${toDateInput(d)} ${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+
+// إنشاء ملف Excel من عدة أوراق [{name, headers, rows}] وتنزيله؛ الأوراق من اليمين إلى اليسار
+async function saveWorkbook(sheets, filename) {
+  const XLSX = await loadXLSX();
+  const wb = XLSX.utils.book_new();
+  wb.Workbook = { Views: [{ RTL: true }] };
+  sheets.forEach(sh => {
+    const ws = XLSX.utils.aoa_to_sheet([sh.headers, ...sh.rows.map(r => r.map(v => v ?? ""))]);
+    // عرض كل عمود حسب أطول قيمة فيه (بين 10 و60 حرفاً)
+    ws["!cols"] = sh.headers.map((h, i) => ({ wch: Math.min(60, Math.max(10, h.length + 2, ...sh.rows.map(r => String(r[i] ?? "").length + 2))) }));
+    XLSX.utils.book_append_sheet(wb, ws, sh.name.slice(0, 31));
+  });
+  XLSX.writeFile(wb, filename);
+}
+
+// تصدير كامل للأدمن: الشكاوى، الجلسات، سجل الشكاوى، وسجل الإحالة — في ملف واحد
+async function exportAllToExcel(secret, complaints) {
+  const [s, l] = await Promise.all([
+    sb.rpc("admin_list_sessions", { p_secret: secret, p_complaint_id: null }),
+    sb.rpc("admin_export_log", { p_secret: secret }),
+  ]);
+  if (s.error || l.error) throw new Error(NET_ERR);
+  const log = l.data || [];
+  await saveWorkbook([
+    { name: "الشكاوى",
+      headers: ["رقم الشكوى", "تاريخ الشكوى", "الحالة", "المشتكي", "رقم التواصل", "المشتكى عليه", "نص الشكوى", "التصنيف",
+                "مُحالة إلى", "النتيجة", "تاريخ الإغلاق", "رمز المتابعة", "تنبيه المتابعة", "المطلوب عند التنبيه",
+                "ملخص للمشتكى عليه", "آخر موعد للاعتراض", "نص الاعتراض", "تاريخ الاعتراض", "آخر تعديل"],
+      rows: complaints.map(c => [c.complaint_number, xlDate(c.received_date), c.status, c.complainant_name, c.contact_number,
+                c.accused_name, c.subject, c.classification, c.referred_to, c.result, xlDate(c.closed_date), c.tracking_code,
+                xlDate(c.reminder_at), c.reminder_note, c.objection_summary, xlDate(c.objection_deadline), c.objection_text,
+                xlDate(c.objection_at), xlDate(c.updated_at)]) },
+    { name: "الجلسات",
+      headers: ["رقم الشكوى", "المشتكي", "تاريخ ووقت الجلسة", "مُحالة إلى", "نتيجة الجلسة", "حالة الشكوى"],
+      rows: (s.data || []).map(x => [x.complaint_number, x.complainant_name, xlDate(x.session_at), x.referred_to, x.result, x.status]) },
+    { name: "سجل الشكاوى",
+      headers: ["رقم الشكوى", "الوقت", "الحدث", "القيمة السابقة", "القيمة الجديدة", "بواسطة", "المصدر", "ملاحظة"],
+      rows: log.map(x => [x.complaint_number, xlDate(x.at), x.event, x.old_value, x.new_value, x.actor, x.source, x.note]) },
+    { name: "سجل الإحالة",
+      headers: ["رقم الشكوى", "الوقت", "من", "إلى", "بواسطة", "المصدر"],
+      rows: log.filter(x => x.field === "referred_to").map(x => [x.complaint_number, xlDate(x.at), x.old_value, x.new_value, x.actor, x.source]) },
+  ], `شكاوى-لجنة-الحج-${toDateInput(new Date())}.xlsx`);
+}
 
 // متابعة الجزء بعد # في الرابط (لاختيار الصفحة)
 function useHash() {
@@ -976,7 +1040,7 @@ function AdminPage({ secret }) {
 const muted = v => v || <span className="muted">—</span>;
 const COLUMNS = [
   { key: "number", label: "رقم الشكوى", sort: c => c.complaint_number, text: c => c.complaint_number, cell: c => <b dir="ltr">{c.complaint_number}</b> },
-  { key: "date", label: "التاريخ", sort: c => new Date(c.received_date).getTime(), text: c => fmtDate(c.received_date), cell: c => fmtDate(c.received_date) },
+  { key: "date", label: "التاريخ", sort: c => new Date(c.received_date).getTime(), text: c => xlDate(c.received_date), cell: c => fmtDate(c.received_date) },
   { key: "name", label: "المشتكي", sort: c => c.complainant_name, text: c => c.complainant_name, cell: c => c.complainant_name },
   { key: "contact", label: "رقم التواصل", sort: c => c.contact_number, text: c => c.contact_number, cell: c => <span dir="ltr">{c.contact_number || "—"}</span> },
   { key: "accused", label: "المشتكى عليه", sort: c => c.accused_name, text: c => c.accused_name, cell: c => muted(c.accused_name) },
@@ -985,7 +1049,7 @@ const COLUMNS = [
   { key: "referred", label: "مُحالة إلى", sort: c => c.referred_to, text: c => c.referred_to, cell: c => muted(c.referred_to) },
   { key: "status", label: "الحالة", sort: c => STATUSES.indexOf(c.status), text: c => c.status, cell: c => <StatusBadge value={c.status} /> },
   { key: "result", label: "النتيجة", sort: c => c.result, text: c => c.result, wrap: true, cell: c => c.result ? <span className="clip">{c.result}</span> : muted() },
-  { key: "closed", label: "تاريخ الإغلاق", sort: c => c.closed_date ? new Date(c.closed_date).getTime() : null, text: c => c.closed_date ? fmtDate(c.closed_date) : "", cell: c => c.closed_date ? fmtDate(c.closed_date) : muted() },
+  { key: "closed", label: "تاريخ الإغلاق", sort: c => c.closed_date ? new Date(c.closed_date).getTime() : null, text: c => xlDate(c.closed_date), cell: c => c.closed_date ? fmtDate(c.closed_date) : muted() },
   { key: "tracking", label: "رمز المتابعة", sort: c => c.tracking_code, text: c => c.tracking_code, cell: c => <span dir="ltr">{c.tracking_code || "—"}</span> },
   { key: "objection", label: "الاعتراض", sort: c => c.objection_at ? new Date(c.objection_at).getTime() : null, text: c => c.objection_text || "",
     cell: c => c.objection_at ? <span className="badge st-review">⚖️ {fmtDate(c.objection_at)}</span> : c.objection_code ? <span className="muted">بانتظار الاعتراض</span> : muted() },
@@ -1072,16 +1136,13 @@ function ComplaintsTable({ secret, rows, onSaved, onOpen, alertsFor }) {
     setBulk({ status: "", classification: "", referred_to: "", closed: "" });
   }
 
-  // تصدير كل الصفوف (بالترتيب الحالي والأعمدة الظاهرة) إلى ملف يفتحه Excel (CSV بترميز UTF-8)
-  function exportExcel() {
-    const cell = v => `"${String(v ?? "").replace(/"/g, '""')}"`;
-    const lines = [cols.map(c => c.label), ...sorted.map(r => cols.map(c => c.text(r)))].map(r => r.map(cell).join(","));
-    const blob = new Blob(["﻿" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = `الشكاوى-${toDateInput(new Date())}.csv`;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  // تصدير كل الصفوف الظاهرة (بالترتيب الحالي والأعمدة الظاهرة) إلى ملف Excel ‎.xlsx
+  async function exportExcel() {
+    setMsg(null);
+    try {
+      await saveWorkbook([{ name: "الشكاوى", headers: cols.map(c => c.label), rows: sorted.map(r => cols.map(c => c.text(r))) }],
+        `الشكاوى-${toDateInput(new Date())}.xlsx`);
+    } catch (e) { setMsg({ type: "error", text: e.message || NET_ERR }); }
   }
 
   // العرض: شريط التغيير الجماعي (عند الاختيار)، شريط الأدوات، الجدول، ثم التنقل بين الصفحات
@@ -1230,9 +1291,19 @@ function AdminDue({ secret, rows, onSaved, reload, onOpen }) {
 
 // تبويب الشكاوى: تصفية بالحالة وبحث، ثم جدول الشكاوى
 function AdminComplaints({ secret, rows, onSaved, reload, onOpen }) {
-  // التصفية والبحث
+  // التصفية والبحث، وحالة التصدير الكامل
   const [filter, setFilter] = useState("الكل");
   const [search, setSearch] = useState("");
+  const [exporting, setExporting] = useState(false);
+  const [exportErr, setExportErr] = useState("");
+
+  // تصدير كل الجداول (الشكاوى، الجلسات، السجل، الإحالة) إلى ملف Excel واحد
+  async function exportAll() {
+    setExporting(true); setExportErr("");
+    try { await exportAllToExcel(secret, rows || []); }
+    catch (e) { setExportErr(e.message || NET_ERR); }
+    setExporting(false);
+  }
 
   // التصفية بالحالة ونص البحث (الرقم، الأسماء، الموضوع، الرموز)
   const term = search.trim();
@@ -1252,7 +1323,9 @@ function AdminComplaints({ secret, rows, onSaved, reload, onOpen }) {
       <div className="row" style={{ marginBottom: 12 }}>
         <input className="grow" type="text" placeholder="بحث بالرقم أو الاسم أو الهاتف أو الموضوع أو الجهة…" value={search} onChange={e => setSearch(e.target.value)} />
         <button className="btn secondary" onClick={reload}>🔄 تحديث</button>
+        <button className="btn gold" disabled={exporting || !rows} onClick={exportAll} title="الشكاوى + الجلسات + سجل الشكاوى + سجل الإحالة">{exporting ? "جارٍ التصدير…" : "📥 تصدير كل الجداول (Excel)"}</button>
       </div>
+      {exportErr && <Alert type="error">{exportErr}</Alert>}
       {rows === null ? <Loading /> : <ComplaintsTable secret={secret} rows={visible} onSaved={onSaved} onOpen={onOpen} />}
     </div>
   );
@@ -2085,6 +2158,14 @@ function ReportsPage({ code, viewerName }) {
             )}
           </div>
           {cardOn && rows.length > 0 && <p className="muted center" style={{ fontSize: 13.5 }}>👁️ اضغط على أي شكوى لعرض بطاقتها (للاطلاع فقط)</p>}
+          {rows.length > 0 && (
+            <div className="center" style={{ marginTop: 12 }}>
+              <button className="btn secondary" onClick={() => saveWorkbook([{ name: "تقرير الشكاوى",
+                headers: ["الحالة", "رقم الشكوى", "تاريخ الشكوى", "اسم المشتكي", "المشتكى عليه", "الموضوع", "النتيجة", "تاريخ الإغلاق"],
+                rows: rows.map(r => [r.status, r.complaint_number, xlDate(r.received_date), r.complainant_name, r.accused_name, r.subject, r.result, xlDate(r.closed_date)]) }],
+                `تقرير-الشكاوى-${range.from || "الكل"}-${range.to || ""}.xlsx`).catch(e => setError(e.message || NET_ERR))}>⬇ تصدير التقرير (Excel)</button>
+            </div>
+          )}
         </>
       )}
       {openNum && <ReportCard code={code} number={openNum} onClose={() => setOpenNum(null)} />}
