@@ -8,6 +8,7 @@
 --  الجداول:
 --    1) complaints       الشكاوى (رمز متابعة للمشتكي، تنبيه متابعة، وقت آخر تعديل)
 --    1ب) sessions        جلسات الشكوى؛ أحدث جلسة تُرحِّل المحال إليه والنتيجة والحالة إلى الشكوى
+--    1ج) complaint_log   سجل الشكوى (كل حدث بوقته ومن قام به)؛ أسطر field = referred_to هي «سجل الإحالة»
 --    2) access_passwords كلمات المرور: أدمن / إدارة (التقارير) / مشتكي (خاصة، 4 أرقام، مرة واحدة)
 --    3) app_settings     الإعدادات: وضع دخول المشتكين وكلمة المرور العامة
 --
@@ -37,6 +38,8 @@
 --                أحدث جلسة تُرحِّل المحال إليه والنتيجة والحالة إلى جدول الشكاوى (مشغّل sessions_after_insert).
 --    2026-09-29  اعتراض المشتكى عليه: رمز اعتراض يولّده الأدمن مع ملخص، وصفحة عامة يقدّم فيها اعتراضه
 --                مرة واحدة (objection_view / submit_objection / admin_set_objection_code).
+--    2026-09-29  القسم 12: سجل الشكوى وسجل الإحالة (complaint_log + مشغّلات)، ومهلة الاعتراض
+--                (objection_deadline) مع تمديد استثنائي بسبب إلزامي؛ الاعتراض بعد المهلة يُرفض (EXPIRED).
 -- =====================================================================
 
 -- ---------------------------------------------------------------------
@@ -106,6 +109,15 @@ drop function if exists public.admin_delete_session(text, uuid);
 drop function if exists public.objection_view(text, text);
 drop function if exists public.submit_objection(text, text, text);
 drop function if exists public.admin_set_objection_code(text, uuid, text);
+drop function if exists public.admin_set_objection_code(text, uuid, text, timestamptz);
+drop function if exists public.admin_set_objection_deadline(text, uuid, timestamptz, text);
+drop function if exists public.admin_complaint_log(text, uuid);
+drop function if exists public.complaints_log_insert() cascade;
+drop function if exists public.complaints_log_update() cascade;
+drop function if exists public.sessions_after_delete() cascade;
+drop function if exists public.log_complaint(uuid, text, text, text, text, text, text);
+drop function if exists public.fmt_ts(timestamptz);
+drop table if exists public.complaint_log cascade;
 drop function if exists public.setting(text);
 
 -- تفعيل pgcrypto لتوليد أرقام عشوائية آمنة
@@ -844,7 +856,313 @@ grant execute on function public.viewer_login(text)                            t
 grant execute on function public.viewer_report(text, timestamptz, timestamptz) to anon, authenticated;
 
 -- ---------------------------------------------------------------------
--- 11) كلمة مرور الأدمن الأولى — غيّر 'غيّرني-123' قبل التنفيذ (6 أحرف على الأقل)
+-- 12) سجل الشكوى (ومنه سجل الإحالة) ومهلة الاعتراض
+--     هذا القسم يُنفَّذ وحده أيضاً كتحديث لقاعدة موجودة (لا يحذف بيانات)،
+--     ويستبدل بعض الدوال السابقة بنسخ تكتب في السجل.
+-- ---------------------------------------------------------------------
+-- آخر موعد لتقديم الاعتراض (بعده يُرفض إلا بتمديد استثنائي من الأدمن)
+alter table public.complaints add column if not exists objection_deadline timestamptz;
+
+-- جدول سجل الشكوى: كل حدث على الشكوى بوقته ومن قام به ومصدره
+create table if not exists public.complaint_log (
+  id            bigint generated always as identity primary key,
+  complaint_id  uuid not null references public.complaints (id) on delete cascade,
+  at            timestamptz not null default now(),     -- وقت الحدث
+  event         text not null,                          -- نوع الحدث (تقديم، إحالة، تغيير الحالة…)
+  field         text,                                   -- الحقل المتغيّر (referred_to = سجل الإحالة)
+  old_value     text,                                   -- القيمة السابقة
+  new_value     text,                                   -- القيمة الجديدة
+  actor         text,                                   -- من قام به (اسم صاحب كلمة مرور الأدمن، أو المشتكي/المشتكى عليه)
+  source        text,                                   -- من أين (تعديل، تعديل جماعي، جلسة…)
+  note          text                                    -- ملاحظة (مثل سبب التمديد الاستثنائي)
+);
+
+-- فهرس لتسريع جلب سجل شكوى معيّنة بالترتيب الزمني
+create index if not exists complaint_log_idx on public.complaint_log (complaint_id, at desc);
+
+-- حماية السجل من الوصول المباشر
+alter table public.complaint_log enable row level security;
+revoke all on public.complaint_log from anon, authenticated;
+
+-- تنسيق وقت للسجل بتوقيت مكة (داخلية)
+create or replace function public.fmt_ts(p timestamptz)
+returns text language sql stable as $$
+  select to_char(p at time zone 'Asia/Riyadh', 'YYYY-MM-DD HH24:MI');
+$$;
+
+-- إضافة سطر للسجل (داخلية): المنفّذ والمصدر والملاحظة تُقرأ من إعدادات الطلب إن لم تُمرَّر
+create or replace function public.log_complaint(
+  p_id uuid, p_event text, p_field text, p_old text, p_new text, p_actor text default null, p_note text default null
+) returns void language sql security definer set search_path = public as $$
+  insert into public.complaint_log (complaint_id, event, field, old_value, new_value, actor, source, note)
+  values (p_id, p_event, p_field, p_old, p_new,
+          coalesce(p_actor, nullif(current_setting('app.actor', true), '')),
+          coalesce(nullif(current_setting('app.source', true), ''), 'تعديل'),
+          coalesce(p_note, nullif(current_setting('app.note', true), '')));
+$$;
+
+-- منع الموقع من استدعاء الدالتين الداخليتين
+revoke all on function public.fmt_ts(timestamptz) from public, anon, authenticated;
+revoke all on function public.log_complaint(uuid, text, text, text, text, text, text) from public, anon, authenticated;
+
+-- التحقق من كلمة المرور (نسخة تحفظ اسم صاحبها ليُسجَّل «من قام بالتعديل» في السجل)
+create or replace function public.verify_password(p_role text, p_password text)
+returns uuid
+language plpgsql security definer set search_path = public as $$
+declare
+  v_pw   text := translate(btrim(coalesce(p_password, '')), '٠١٢٣٤٥٦٧٨٩', '0123456789');
+  v_id   uuid;
+  v_name text;
+begin
+  if public.ip_locked() then
+    return null;
+  end if;
+  if p_role = 'إدارة' then
+    v_pw := upper(v_pw);
+  end if;
+  update public.access_passwords
+     set last_seen_at = now()
+   where role = p_role and password = v_pw and active and used_at is null
+  returning id, holder_name into v_id, v_name;
+  if v_id is not null then
+    perform set_config('app.actor', coalesce(v_name, p_role), true);
+  end if;
+  return v_id;
+end $$;
+
+-- بعد تقديم شكوى: أول سطر في سجلها
+create or replace function public.complaints_log_insert()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  perform public.log_complaint(new.id, 'تقديم الشكوى', 'status', null, new.status, 'المشتكي', null);
+  return null;
+end $$;
+
+-- ربطها بجدول الشكاوى بعد كل إدخال
+drop trigger if exists trg_complaints_log_insert on public.complaints;
+create trigger trg_complaints_log_insert
+  after insert on public.complaints
+  for each row execute function public.complaints_log_insert();
+
+-- بعد تعديل شكوى: سطر في السجل لكل حقل تغيّر (الإحالة، الحالة، التصنيف، النتيجة، الاعتراض…)
+create or replace function public.complaints_log_update()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  -- الحالة: إغلاق / إعادة فتح / تغيير
+  if new.status is distinct from old.status then
+    perform public.log_complaint(new.id,
+      case when new.status = 'مغلقة' then 'إغلاق الشكوى' when old.status = 'مغلقة' then 'إعادة فتح الشكوى' else 'تغيير الحالة' end,
+      'status', old.status, new.status);
+  end if;
+  -- الإحالة (هذه الأسطر تكوّن «سجل الإحالة»)
+  if new.referred_to is distinct from old.referred_to then
+    perform public.log_complaint(new.id, 'إحالة', 'referred_to', old.referred_to, new.referred_to);
+  end if;
+  -- التصنيف والنتيجة
+  if new.classification is distinct from old.classification then
+    perform public.log_complaint(new.id, 'تغيير التصنيف', 'classification', old.classification, new.classification);
+  end if;
+  if new.result is distinct from old.result then
+    perform public.log_complaint(new.id, 'تحديث النتيجة', 'result', old.result, new.result);
+  end if;
+  -- تعديل تاريخ الإغلاق لشكوى مغلقة أصلاً (الإغلاق وإعادة الفتح مسجّلان مع الحالة)
+  if new.closed_date is distinct from old.closed_date and new.closed_date is not null and old.closed_date is not null then
+    perform public.log_complaint(new.id, 'تعديل تاريخ الإغلاق', 'closed_date', public.fmt_ts(old.closed_date), public.fmt_ts(new.closed_date));
+  end if;
+  -- تنبيه المتابعة اليدوي
+  if new.reminder_at is distinct from old.reminder_at then
+    perform public.log_complaint(new.id, case when new.reminder_at is null then 'إلغاء تنبيه المتابعة' else 'تنبيه متابعة' end,
+      'reminder_at', public.fmt_ts(old.reminder_at), public.fmt_ts(new.reminder_at), null, new.reminder_note);
+  end if;
+  -- الاعتراض: توليد الرمز، أو تمديد المهلة، أو تقديم الاعتراض
+  if new.objection_code is distinct from old.objection_code and new.objection_code is not null then
+    perform public.log_complaint(new.id, 'توليد رمز اعتراض', 'objection_deadline', null,
+      'آخر موعد: ' || coalesce(public.fmt_ts(new.objection_deadline), '—'));
+  elsif new.objection_deadline is distinct from old.objection_deadline then
+    perform public.log_complaint(new.id, 'تمديد استثنائي لمهلة الاعتراض', 'objection_deadline',
+      public.fmt_ts(old.objection_deadline), public.fmt_ts(new.objection_deadline));
+  end if;
+  if old.objection_at is null and new.objection_at is not null then
+    perform public.log_complaint(new.id, 'تقديم اعتراض', 'objection', null, left(new.objection_text, 300), 'المشتكى عليه', null);
+  end if;
+  return null;
+end $$;
+
+-- ربطها بجدول الشكاوى بعد كل تعديل
+drop trigger if exists trg_complaints_log_update on public.complaints;
+create trigger trg_complaints_log_update
+  after update on public.complaints
+  for each row execute function public.complaints_log_update();
+
+-- بعد إضافة جلسة: سطر «جلسة» في السجل، ثم ترحيل قيمها إلى الشكوى (مصدر التغييرات: «جلسة»)
+create or replace function public.sessions_after_insert()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  perform public.log_complaint(new.complaint_id, 'جلسة', 'session', null, new.status, null,
+    'موعد الجلسة: ' || public.fmt_ts(new.session_at)
+    || coalesce(' — الإحالة: ' || nullif(btrim(new.referred_to), ''), '')
+    || coalesce(' — النتيجة: ' || nullif(btrim(new.result), ''), ''));
+  if exists (select 1 from public.sessions s
+             where s.complaint_id = new.complaint_id and s.session_at > new.session_at and s.id <> new.id) then
+    return new;
+  end if;
+  perform set_config('app.source', 'جلسة', true);
+  update public.complaints set
+    status      = new.status,
+    referred_to = coalesce(nullif(btrim(new.referred_to), ''), referred_to),
+    result      = coalesce(nullif(btrim(new.result), ''), result),
+    closed_date = case when new.status = 'مغلقة' then new.session_at end
+  where id = new.complaint_id;
+  return new;
+end $$;
+
+-- بعد حذف جلسة: سطر في السجل (إلا إذا حُذفت الشكوى نفسها)
+create or replace function public.sessions_after_delete()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if exists (select 1 from public.complaints where id = old.complaint_id) then
+    perform public.log_complaint(old.complaint_id, 'حذف جلسة', 'session', old.status, null, null,
+      'موعد الجلسة المحذوفة: ' || public.fmt_ts(old.session_at));
+  end if;
+  return null;
+end $$;
+
+-- ربطها بجدول الجلسات بعد كل حذف
+drop trigger if exists trg_sessions_after_delete on public.sessions;
+create trigger trg_sessions_after_delete
+  after delete on public.sessions
+  for each row execute function public.sessions_after_delete();
+
+-- التعديل الجماعي (نسخة تجعل مصدر السجل «تعديل جماعي»)
+create or replace function public.admin_bulk_update(
+  p_secret text, p_ids uuid[], p_status text, p_classification text, p_referred_to text, p_closed_date timestamptz
+) returns setof public.complaints
+language plpgsql security definer set search_path = public as $$
+begin
+  if public.verify_password('أدمن', p_secret) is null then
+    return;
+  end if;
+  perform set_config('app.source', 'تعديل جماعي', true);
+  update public.complaints set
+    status         = coalesce(p_status, status),
+    classification = coalesce(nullif(btrim(p_classification), ''), classification),
+    referred_to    = coalesce(nullif(btrim(p_referred_to), ''), referred_to),
+    closed_date    = case when coalesce(p_status, status) = 'مغلقة' then coalesce(p_closed_date, closed_date) end
+  where id = any (p_ids);
+  return query select * from public.complaints where id = any (p_ids);
+end $$;
+
+-- سجل شكوى معيّنة للأدمن (الأحدث أولاً)
+create or replace function public.admin_complaint_log(p_secret text, p_complaint_id uuid)
+returns table (at timestamptz, event text, field text, old_value text, new_value text, actor text, source text, note text)
+language plpgsql security definer set search_path = public as $$
+begin
+  if public.verify_password('أدمن', p_secret) is null then
+    return;
+  end if;
+  return query
+    select l.at, l.event, l.field, l.old_value, l.new_value, l.actor, l.source, l.note
+    from public.complaint_log l
+    where l.complaint_id = p_complaint_id
+    order by l.at desc, l.id desc;
+end $$;
+
+-- توليد رمز الاعتراض مع الملخص وآخر موعد للاعتراض (الافتراضي بعد 3 أيام)
+drop function if exists public.admin_set_objection_code(text, uuid, text);
+drop function if exists public.admin_set_objection_code(text, uuid, text, timestamptz);
+create function public.admin_set_objection_code(p_secret text, p_id uuid, p_summary text, p_deadline timestamptz)
+returns setof public.complaints
+language plpgsql security definer set search_path = public as $$
+begin
+  if public.verify_password('أدمن', p_secret) is null then
+    return;
+  end if;
+  if coalesce(btrim(p_summary), '') = '' then
+    raise exception 'يرجى كتابة الملخص الذي سيراه المشتكى عليه';
+  end if;
+  update public.complaints
+     set objection_code     = public.random_password(6, true),
+         objection_summary  = btrim(left(p_summary, 5000)),
+         objection_deadline = coalesce(p_deadline, now() + interval '3 days')
+   where id = p_id;
+  return query select * from public.complaints where id = p_id;
+end $$;
+
+-- تمديد استثنائي لمهلة الاعتراض: موعد جديد + سبب إلزامي يُسجَّل في السجل
+create or replace function public.admin_set_objection_deadline(p_secret text, p_id uuid, p_deadline timestamptz, p_reason text)
+returns setof public.complaints
+language plpgsql security definer set search_path = public as $$
+begin
+  if public.verify_password('أدمن', p_secret) is null then
+    return;
+  end if;
+  if coalesce(btrim(p_reason), '') = '' then
+    raise exception 'يرجى كتابة سبب التمديد الاستثنائي';
+  end if;
+  if p_deadline is null or p_deadline <= now() then
+    raise exception 'الموعد الجديد يجب أن يكون في المستقبل';
+  end if;
+  perform set_config('app.note', 'السبب: ' || btrim(left(p_reason, 500)), true);
+  update public.complaints set objection_deadline = p_deadline
+   where id = p_id and objection_code is not null and objection_at is null;
+  return query select * from public.complaints where id = p_id;
+end $$;
+
+-- ما يراه المشتكى عليه (نسخة تُرجع آخر موعد للاعتراض)
+drop function if exists public.objection_view(text, text);
+create function public.objection_view(p_number text, p_code text)
+returns table (complaint_number text, received_date timestamptz, summary text, objection_text text,
+               objection_at timestamptz, deadline timestamptz)
+language sql stable security definer set search_path = public as $$
+  select c.complaint_number, c.received_date, c.objection_summary, c.objection_text, c.objection_at, c.objection_deadline
+  from public.complaints c
+  where upper(c.complaint_number) = upper(btrim(coalesce(p_number, '')))
+    and c.objection_code is not null
+    and c.objection_code = regexp_replace(translate(coalesce(p_code, ''), '٠١٢٣٤٥٦٧٨٩', '0123456789'), '\D', '', 'g');
+$$;
+
+-- تقديم الاعتراض (نسخة ترفض بعد انتهاء المهلة): 'OK' / 'INVALID' / 'ALREADY' / 'EXPIRED'
+create or replace function public.submit_objection(p_number text, p_code text, p_text text)
+returns text
+language plpgsql security definer set search_path = public as $$
+declare
+  v_id       uuid;
+  v_done     timestamptz;
+  v_deadline timestamptz;
+begin
+  if coalesce(btrim(p_text), '') = '' then
+    raise exception 'نص الاعتراض فارغ';
+  end if;
+  if length(p_text) > 5000 then
+    raise exception 'تجاوز النص الطول المسموح';
+  end if;
+  select c.id, c.objection_at, c.objection_deadline into v_id, v_done, v_deadline
+  from public.complaints c
+  where upper(c.complaint_number) = upper(btrim(coalesce(p_number, '')))
+    and c.objection_code is not null
+    and c.objection_code = regexp_replace(translate(coalesce(p_code, ''), '٠١٢٣٤٥٦٧٨٩', '0123456789'), '\D', '', 'g')
+  for update;
+  if v_id is null then
+    return 'INVALID';
+  end if;
+  if v_done is not null then
+    return 'ALREADY';
+  end if;
+  if v_deadline is not null and now() > v_deadline then
+    return 'EXPIRED';
+  end if;
+  update public.complaints set objection_text = btrim(p_text), objection_at = now() where id = v_id;
+  return 'OK';
+end $$;
+
+-- السماح للموقع باستدعاء الدوال الجديدة والمستبدلة
+grant execute on function public.admin_complaint_log(text, uuid)                              to anon, authenticated;
+grant execute on function public.admin_set_objection_code(text, uuid, text, timestamptz)      to anon, authenticated;
+grant execute on function public.admin_set_objection_deadline(text, uuid, timestamptz, text)  to anon, authenticated;
+grant execute on function public.objection_view(text, text)                                   to anon, authenticated;
+
+-- ---------------------------------------------------------------------
+-- 13) كلمة مرور الأدمن الأولى — غيّر 'غيّرني-123' قبل التنفيذ (6 أحرف على الأقل)
 -- ---------------------------------------------------------------------
 insert into public.access_passwords (role, password, holder_name)
 values ('أدمن', '12345', 'المدير');

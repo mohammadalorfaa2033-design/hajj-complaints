@@ -42,6 +42,8 @@
                 أسفل دخول الأدمن يفتح روبوت GitHub.
     2026-09-29  اعتراض المشتكى عليه: قسم في تفاصيل الشكوى لتوليد رمز اعتراض مع ملخص، وصفحة عامة ‎#/objection
                 يقدّم فيها اعتراضه مرة واحدة؛ تنبيه «وصل اعتراض» في «المطلوب»، وعمود «الاعتراض» في الجدول.
+    2026-09-29  سجل الشكوى وسجل الإحالة (خط زمني في تفاصيل الشكوى)، ومهلة الاعتراض مع تمديد استثنائي
+                بسبب إلزامي؛ صفحة الاعتراض تعرض آخر موعد وترفض بعده.
 =======================================================================
 -->
 <html lang="ar" dir="rtl">
@@ -262,6 +264,22 @@
   .sessions { margin-top: 20px; padding-top: 16px; border-top: 2px dashed var(--line); }
   .sessions h3 { margin: 0 0 10px; font-size: 16px; }
   .session-form { background: rgba(255,255,255,.7); border: 1px solid var(--line); border-radius: 10px; padding: 12px; }
+
+  /* مهلة الاعتراض: أخضر فاتح، وأحمر عند انتهائها */
+  .deadline { background: var(--ok-soft); color: var(--ok); border-radius: 9px; padding: 7px 12px; margin-bottom: 10px; font-size: 14px; }
+  .deadline.over { background: var(--danger-soft); color: var(--danger); }
+
+  /* سجل الشكوى: خط زمني (الإحالة بلون أزرق، الحالة بلون بنفسجي) */
+  .timeline { list-style: none; margin: 0; padding: 0 14px 0 0; border-inline-start: 2px solid var(--line); }
+  .timeline li { position: relative; padding: 0 16px 14px 0; }
+  .timeline li::before { content: ""; position: absolute; inset-inline-start: -7px; top: 6px; width: 12px; height: 12px; border-radius: 50%; background: #b7c0b9; border: 2px solid #fff; }
+  .timeline li.ref::before { background: #1d5fbf; }
+  .timeline li.st::before { background: #7a3fb8; }
+  .timeline .t-head { font-size: 14.5px; }
+  .timeline .t-body { font-size: 14px; margin-top: 2px; overflow-wrap: anywhere; }
+  .timeline .t-body .old { color: var(--muted); text-decoration: line-through; }
+  .timeline .t-note { font-size: 13.5px; background: #f8f9f7; border-radius: 6px; padding: 4px 8px; margin-top: 4px; overflow-wrap: anywhere; }
+  .timeline .t-by { font-size: 12.5px; margin-top: 2px; }
 
   /* وضع دخول المشتكين: بطاقات اختيار */
   .modes { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; }
@@ -731,7 +749,8 @@ function ObjectionPage() {
     setBusy(false);
     if (rpcErr) return setError("تعذّر إرسال الاعتراض، يرجى المحاولة مرة أخرى.");
     if (data === "INVALID") return setError("رقم الشكوى أو رمز الاعتراض لم يعد صالحاً.");
-    if (data === "ALREADY") setError("سبق تقديم الاعتراض على هذه الشكوى.");
+    if (data === "EXPIRED") setError("انتهت مدة الاعتراض. للحالات الاستثنائية تواصل مع اللجنة.");
+    else if (data === "ALREADY") setError("سبق تقديم الاعتراض على هذه الشكوى.");
     else setDone(true);
     await lookup(number.trim(), code.trim());
   }
@@ -760,7 +779,12 @@ function ObjectionPage() {
               <span className="muted">📅 {fmtDate(view.received_date)}</span>
             </div>
             <div className="field-label">ملخص الشكوى</div>
-            <div className="subject" style={{ marginBottom: 0 }}>{view.summary}</div>
+            <div className="subject">{view.summary}</div>
+            {view.deadline && !view.objection_at && (
+              <div className={`deadline ${new Date(view.deadline) < new Date() ? "over" : ""}`} style={{ marginBottom: 0 }}>
+                ⏳ آخر موعد للاعتراض: <b>{fmtDateTime(view.deadline)}</b>
+              </div>
+            )}
           </div>
           {done && <Alert type="ok">✅ تم تسجيل اعتراضك بنجاح، وستراجعه اللجنة.</Alert>}
           {error && <Alert type="error">{error}</Alert>}
@@ -769,6 +793,11 @@ function ObjectionPage() {
               <h2>اعتراضك</h2>
               <div className="muted" style={{ fontSize: 13.5 }}>قُدّم في {fmtDateTime(view.objection_at)} — لا يمكن تعديله.</div>
               <div className="subject" style={{ marginTop: 6, marginBottom: 0 }}>{view.objection_text}</div>
+            </div>
+          ) : view.deadline && new Date(view.deadline) < new Date() ? (
+            <div className="card center">
+              <h2 style={{ color: "var(--danger)" }}>انتهت مدة الاعتراض</h2>
+              <p className="muted" style={{ margin: 0 }}>لا يُقبل الاعتراض بعد الموعد المحدد إلا في الحالات الاستثنائية. تواصل مع اللجنة إن كان لديك عذر.</p>
             </div>
           ) : (
             <form className="card" onSubmit={submit} noValidate>
@@ -1233,6 +1262,7 @@ function ComplaintCard({ secret, complaint: c, onSaved, onSessionsChanged }) {
   });
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null);
+  const [logVer, setLogVer] = useState(0);   // يزيد عند تغيّر الجلسات فيُعاد جلب سجل الشكوى
   const set = key => e => { setV(x => ({ ...x, [key]: e.target.value })); setMsg(null); };
 
   // عند اختيار «مغلقة» يُملأ تاريخ الإغلاق بتاريخ اليوم إن كان فارغاً؛ وأي حالة أخرى تمسح التاريخ
@@ -1322,37 +1352,62 @@ function ComplaintCard({ secret, complaint: c, onSaved, onSessionsChanged }) {
       </div>
       <button className="btn block" style={{ marginTop: 14 }} disabled={busy} onClick={save}>{busy ? "جارٍ الحفظ…" : "حفظ"}</button>
       <ObjectionSection secret={secret} complaint={c} onSaved={onSaved} />
-      <SessionsSection secret={secret} complaint={c} onApplied={applyFromSession} onChanged={onSessionsChanged || (() => {})} />
+      <SessionsSection secret={secret} complaint={c} onApplied={applyFromSession} onChanged={() => { setLogVer(n => n + 1); (onSessionsChanged || (() => {}))(); }} />
+      <HistorySection secret={secret} complaint={c} version={logVer} />
     </div>
   );
 }
 
 // ---------------------------------------------------------------------
-// اعتراض المشتكى عليه (في تفاصيل الشكوى): عرض الاعتراض إن وصل، وتوليد رمز الاعتراض مع الملخص
+// اعتراض المشتكى عليه (في تفاصيل الشكوى): عرض الاعتراض إن وصل، توليد رمز الاعتراض مع الملخص
+// وآخر موعد، وتمديد استثنائي للمهلة بسبب إلزامي
 // ---------------------------------------------------------------------
+const OBJECTION_DAYS = Number(cfg.OBJECTION_DAYS) || 3;
+const defaultDeadline = () => { const d = new Date(); d.setDate(d.getDate() + OBJECTION_DAYS); return toDateTimeInput(d); };
+
 function ObjectionSection({ secret, complaint: c, onSaved }) {
-  // الملخص الذي سيراه المشتكى عليه (يبدأ بنص الشكوى)، فتح نموذج التوليد، والرسائل
+  // الملخص، آخر موعد، وضع النموذج (generate / extend)، بيانات التمديد، والرسائل
   const [summary, setSummary] = useState(c.objection_summary || c.subject || "");
-  const [open, setOpen] = useState(false);
+  const [deadline, setDeadline] = useState(defaultDeadline);
+  const [mode, setMode] = useState(null);
+  const [ext, setExt] = useState({ at: defaultDeadline(), reason: "" });
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null);
+
+  // هل انتهت المهلة؟
+  const expired = c.objection_deadline && new Date(c.objection_deadline) < new Date();
 
   // توليد الرمز عبر admin_set_objection_code (إعادة التوليد تُبطل الرمز القديم)
   async function generate() {
     if (!summary.trim()) return setMsg({ type: "error", text: "اكتب الملخص الذي سيراه المشتكى عليه." });
+    if (!deadline || new Date(deadline) <= new Date()) return setMsg({ type: "error", text: "آخر موعد للاعتراض يجب أن يكون في المستقبل." });
     setBusy(true); setMsg(null);
-    const { data, error } = await sb.rpc("admin_set_objection_code", { p_secret: secret, p_id: c.id, p_summary: summary });
+    const { data, error } = await sb.rpc("admin_set_objection_code", { p_secret: secret, p_id: c.id, p_summary: summary, p_deadline: dateTimeInputToIso(deadline) });
     setBusy(false);
     if (error || !data || !data.length) return setMsg({ type: "error", text: "تعذّر توليد الرمز، يرجى المحاولة مرة أخرى." });
     onSaved(data[0]);
-    setOpen(false);
+    setMode(null);
     setMsg({ type: "ok", text: "تم توليد رمز الاعتراض. انسخ الرسالة وأرسلها للمشتكى عليه." });
   }
 
-  // نص الرسالة للمشتكى عليه
-  const text = `للاطلاع على الشكوى المقدّمة بحقك وتقديم اعتراضك (مرة واحدة) افتح الرابط:\n${siteUrl()}#/objection\nرقم الشكوى: ${c.complaint_number}\nرمز الاعتراض: ${c.objection_code}`;
+  // تمديد استثنائي عبر admin_set_objection_deadline (السبب إلزامي ويُسجَّل في سجل الشكوى)
+  async function extend() {
+    if (!ext.reason.trim()) return setMsg({ type: "error", text: "اكتب سبب التمديد الاستثنائي." });
+    if (!ext.at || new Date(ext.at) <= new Date()) return setMsg({ type: "error", text: "الموعد الجديد يجب أن يكون في المستقبل." });
+    setBusy(true); setMsg(null);
+    const { data, error } = await sb.rpc("admin_set_objection_deadline", { p_secret: secret, p_id: c.id, p_deadline: dateTimeInputToIso(ext.at), p_reason: ext.reason });
+    setBusy(false);
+    if (error || !data || !data.length) return setMsg({ type: "error", text: "تعذّر التمديد، يرجى المحاولة مرة أخرى." });
+    onSaved(data[0]);
+    setMode(null);
+    setExt({ at: defaultDeadline(), reason: "" });
+    setMsg({ type: "ok", text: "تم التمديد الاستثنائي، وسُجّل سببه في سجل الشكوى." });
+  }
 
-  // العرض: الاعتراض المقدَّم (إن وُجد)، ثم الرمز الحالي أو نموذج التوليد
+  // نص الرسالة للمشتكى عليه (مع آخر موعد)
+  const text = `للاطلاع على الشكوى المقدّمة بحقك وتقديم اعتراضك (مرة واحدة) افتح الرابط:\n${siteUrl()}#/objection\nرقم الشكوى: ${c.complaint_number}\nرمز الاعتراض: ${c.objection_code}\nآخر موعد للاعتراض: ${fmtDateTime(c.objection_deadline)}`;
+
+  // العرض: الاعتراض المقدَّم، أو الرمز الحالي مع المهلة وأزراره، أو زر التوليد؛ ثم النموذج المفتوح
   return (
     <div className="sessions">
       <h3>⚖️ اعتراض المشتكى عليه</h3>
@@ -1362,32 +1417,106 @@ function ObjectionSection({ secret, complaint: c, onSaved }) {
           <div className="muted" style={{ fontSize: 13.5 }}>قُدّم في {fmtDateTime(c.objection_at)}</div>
           <div className="subject" style={{ marginTop: 6 }}>{c.objection_text}</div>
         </>
-      ) : c.objection_code && !open ? (
+      ) : c.objection_code && !mode ? (
         <>
-          <p className="muted" style={{ marginTop: 0 }}>لم يقدّم المشتكى عليه اعتراضه بعد. رمز الاعتراض:</p>
+          <p className="muted" style={{ margin: "0 0 4px" }}>لم يقدّم المشتكى عليه اعتراضه بعد. رمز الاعتراض:</p>
           <div className="big-code" style={{ fontSize: 28 }}>{c.objection_code}</div>
+          <div className={`deadline ${expired ? "over" : ""}`}>
+            ⏳ آخر موعد للاعتراض: <b>{fmtDateTime(c.objection_deadline)}</b> {expired ? "— انتهت المهلة" : ""}
+          </div>
           <div className="grid" style={{ gridTemplateColumns: "1fr 1fr" }}>
             <button type="button" className="btn secondary" onClick={async () => setMsg(await copyText(text) ? { type: "ok", text: "تم نسخ الرسالة." } : { type: "error", text: "تعذّر النسخ." })}>📋 نسخ الرسالة</button>
-            <button type="button" className="btn secondary" onClick={() => { setOpen(true); setMsg(null); }}>🔄 رمز جديد / تعديل الملخص</button>
+            <button type="button" className={`btn ${expired ? "gold" : "secondary"}`} onClick={() => { setMode("extend"); setMsg(null); }}>⏳ تمديد استثنائي</button>
           </div>
+          <button type="button" className="btn danger-text" style={{ marginTop: 6 }} onClick={() => { setMode("generate"); setMsg(null); }}>🔄 رمز جديد / تعديل الملخص</button>
         </>
-      ) : !open ? (
+      ) : !mode ? (
         <>
           <p className="muted" style={{ marginTop: 0 }}>لم يُرسَل للمشتكى عليه رمز اعتراض بعد.</p>
-          <button type="button" className="btn secondary block" onClick={() => setOpen(true)}>⚖️ توليد رمز اعتراض للمشتكى عليه</button>
+          <button type="button" className="btn secondary block" onClick={() => setMode("generate")}>⚖️ توليد رمز اعتراض للمشتكى عليه</button>
         </>
       ) : null}
-      {open && !c.objection_at && (
+
+      {mode === "generate" && !c.objection_at && (
         <div className="session-form">
           <Field label="الملخص الذي سيراه المشتكى عليه" hint="احذف منه ما قد يكشف هوية المشتكي؛ لا يظهر له اسم المشتكي ولا رقمه">
             <textarea style={{ minHeight: 90 }} value={summary} onChange={e => setSummary(e.target.value)} maxLength={5000} />
           </Field>
+          <div style={{ marginTop: 10 }}>
+            <Field label="آخر موعد للاعتراض" hint={`الافتراضي بعد ${OBJECTION_DAYS} أيام؛ بعده يُرفض الاعتراض إلا بتمديد استثنائي`}>
+              <input type="datetime-local" value={deadline} onChange={e => setDeadline(e.target.value)} />
+            </Field>
+          </div>
           {c.objection_code && <small className="hint" style={{ display: "block", marginTop: 6 }}>توليد رمز جديد يُبطل الرمز السابق.</small>}
           <div className="grid" style={{ gridTemplateColumns: "1fr 1fr", marginTop: 10 }}>
             <button type="button" className="btn gold" disabled={busy} onClick={generate}>{busy ? "جارٍ التوليد…" : "توليد الرمز"}</button>
-            <button type="button" className="btn secondary" onClick={() => setOpen(false)}>تراجع</button>
+            <button type="button" className="btn secondary" onClick={() => setMode(null)}>تراجع</button>
           </div>
         </div>
+      )}
+
+      {mode === "extend" && !c.objection_at && (
+        <div className="session-form">
+          <div className="field-label" style={{ marginBottom: 8 }}>⏳ تمديد استثنائي لمهلة الاعتراض</div>
+          <div className="grid">
+            <Field label="الموعد الجديد" required><input type="datetime-local" value={ext.at} onChange={e => setExt(x => ({ ...x, at: e.target.value }))} /></Field>
+            <Field label="سبب الاستثناء" required full><textarea style={{ minHeight: 70 }} value={ext.reason} onChange={e => setExt(x => ({ ...x, reason: e.target.value }))} maxLength={500} placeholder="مثال: كان المشتكى عليه في المشاعر ولم يتمكن من الاطلاع" /></Field>
+          </div>
+          <div className="grid" style={{ gridTemplateColumns: "1fr 1fr", marginTop: 10 }}>
+            <button type="button" className="btn gold" disabled={busy} onClick={extend}>{busy ? "جارٍ الحفظ…" : "تمديد"}</button>
+            <button type="button" className="btn secondary" onClick={() => setMode(null)}>تراجع</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// سجل الشكوى (في تفاصيل الشكوى): كل الأحداث، أو «سجل الإحالة» فقط
+// ---------------------------------------------------------------------
+function HistorySection({ secret, complaint: c, version }) {
+  // أسطر السجل، التبويب (all / referral)، والرسالة
+  const [rows, setRows] = useState(null);
+  const [tab, setTab] = useState("all");
+  const [error, setError] = useState("");
+
+  // جلب السجل (يُعاد عند تعديل الشكوى أو تغيّر الجلسات)
+  const load = useCallback(async () => {
+    const { data, error } = await sb.rpc("admin_complaint_log", { p_secret: secret, p_complaint_id: c.id });
+    if (error) { setRows([]); return setError(NET_ERR); }
+    setError(""); setRows(data || []);
+  }, [secret, c.id]);
+  useEffect(() => { load(); }, [load, c.updated_at, version]);
+
+  // الأسطر الظاهرة حسب التبويب
+  const referrals = (rows || []).filter(r => r.field === "referred_to");
+  const visible = tab === "referral" ? referrals : (rows || []);
+
+  // عرض القيمة: من ← إلى
+  const change = r => r.old_value && r.new_value ? <><span className="old">{r.old_value}</span> ← <b>{r.new_value}</b></>
+    : r.new_value ? <b>{r.new_value}</b> : r.old_value ? <span className="old">{r.old_value}</span> : null;
+
+  // العرض: تبويبا «الكل» و«سجل الإحالة»، ثم الخط الزمني
+  return (
+    <div className="sessions">
+      <h3>📜 سجل الشكوى</h3>
+      <div className="chips">
+        <button className={tab === "all" ? "active" : ""} onClick={() => setTab("all")}>الكل ({(rows || []).length})</button>
+        <button className={tab === "referral" ? "active" : ""} onClick={() => setTab("referral")}>سجل الإحالة ({referrals.length})</button>
+      </div>
+      {error && <Alert type="error">{error}</Alert>}
+      {rows === null ? <Loading /> : visible.length === 0 ? <p className="muted">لا توجد أحداث مسجّلة{tab === "referral" ? " للإحالة" : ""}.</p> : (
+        <ol className="timeline">
+          {visible.map((r, i) => (
+            <li key={i} className={r.field === "referred_to" ? "ref" : r.field === "status" ? "st" : ""}>
+              <div className="t-head"><b>{r.event}</b> <span className="muted">· {fmtDateTime(r.at)}</span></div>
+              {change(r) && <div className="t-body">{change(r)}</div>}
+              {r.note && <div className="t-note">{r.note}</div>}
+              <div className="t-by muted">{r.actor ? `بواسطة: ${r.actor}` : ""}{r.source && r.actor ? " · " : ""}{r.source && !["المشتكي", "المشتكى عليه"].includes(r.actor) ? r.source : ""}</div>
+            </li>
+          ))}
+        </ol>
       )}
     </div>
   );
