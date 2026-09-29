@@ -44,6 +44,8 @@
                 يقدّم فيها اعتراضه مرة واحدة؛ تنبيه «وصل اعتراض» في «المطلوب»، وعمود «الاعتراض» في الجدول.
     2026-09-29  سجل الشكوى وسجل الإحالة (خط زمني في تفاصيل الشكوى)، ومهلة الاعتراض مع تمديد استثنائي
                 بسبب إلزامي؛ صفحة الاعتراض تعرض آخر موعد وترفض بعده.
+    2026-09-29  بطاقة الشكوى في التقارير للاطلاع فقط (تفاصيل + اعتراض + جلسات + سجل)، مع مفتاح في تبويب
+                «كلمات مرور الإدارة» لإظهارها أو إخفائها.
 =======================================================================
 -->
 <html lang="ar" dir="rtl">
@@ -264,6 +266,14 @@
   .sessions { margin-top: 20px; padding-top: 16px; border-top: 2px dashed var(--line); }
   .sessions h3 { margin: 0 0 10px; font-size: 16px; }
   .session-form { background: rgba(255,255,255,.7); border: 1px solid var(--line); border-radius: 10px; padding: 12px; }
+
+  /* بطاقة التقارير (للاطلاع فقط): صفوف قابلة للضغط، شارة القراءة، وشبكة البيانات */
+  table.stack tr.clickable { cursor: pointer; }
+  table.stack tr.clickable:hover td { filter: brightness(.97); }
+  .readonly-tag { background: #eef0ed; color: #46534c; border-radius: 999px; padding: 0 8px; font-weight: 700; }
+  .detail-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px 18px; margin: 10px 0 14px; }
+  .detail-grid dt { color: var(--muted); font-size: 13px; }
+  .detail-grid dd { margin: 2px 0 0; font-weight: 700; overflow-wrap: anywhere; }
 
   /* مهلة الاعتراض: أخضر فاتح، وأحمر عند انتهائها */
   .deadline { background: var(--ok-soft); color: var(--ok); border-radius: 9px; padding: 7px 12px; margin-bottom: 10px; font-size: 14px; }
@@ -1493,10 +1503,6 @@ function HistorySection({ secret, complaint: c, version }) {
   const referrals = (rows || []).filter(r => r.field === "referred_to");
   const visible = tab === "referral" ? referrals : (rows || []);
 
-  // عرض القيمة: من ← إلى
-  const change = r => r.old_value && r.new_value ? <><span className="old">{r.old_value}</span> ← <b>{r.new_value}</b></>
-    : r.new_value ? <b>{r.new_value}</b> : r.old_value ? <span className="old">{r.old_value}</span> : null;
-
   // العرض: تبويبا «الكل» و«سجل الإحالة»، ثم الخط الزمني
   return (
     <div className="sessions">
@@ -1506,19 +1512,27 @@ function HistorySection({ secret, complaint: c, version }) {
         <button className={tab === "referral" ? "active" : ""} onClick={() => setTab("referral")}>سجل الإحالة ({referrals.length})</button>
       </div>
       {error && <Alert type="error">{error}</Alert>}
-      {rows === null ? <Loading /> : visible.length === 0 ? <p className="muted">لا توجد أحداث مسجّلة{tab === "referral" ? " للإحالة" : ""}.</p> : (
-        <ol className="timeline">
-          {visible.map((r, i) => (
-            <li key={i} className={r.field === "referred_to" ? "ref" : r.field === "status" ? "st" : ""}>
-              <div className="t-head"><b>{r.event}</b> <span className="muted">· {fmtDateTime(r.at)}</span></div>
-              {change(r) && <div className="t-body">{change(r)}</div>}
-              {r.note && <div className="t-note">{r.note}</div>}
-              <div className="t-by muted">{r.actor ? `بواسطة: ${r.actor}` : ""}{r.source && r.actor ? " · " : ""}{r.source && !["المشتكي", "المشتكى عليه"].includes(r.actor) ? r.source : ""}</div>
-            </li>
-          ))}
-        </ol>
-      )}
+      {rows === null ? <Loading /> : visible.length === 0 ? <p className="muted">لا توجد أحداث مسجّلة{tab === "referral" ? " للإحالة" : ""}.</p> : <Timeline rows={visible} />}
     </div>
+  );
+}
+
+// الخط الزمني لسجل الشكوى (يُستخدم في نافذة الأدمن وفي بطاقة التقارير)
+function Timeline({ rows }) {
+  // عرض القيمة: من ← إلى
+  const change = r => r.old_value && r.new_value ? <><span className="old">{r.old_value}</span> ← <b>{r.new_value}</b></>
+    : r.new_value ? <b>{r.new_value}</b> : r.old_value ? <span className="old">{r.old_value}</span> : null;
+  return (
+    <ol className="timeline">
+      {rows.map((r, i) => (
+        <li key={i} className={r.field === "referred_to" ? "ref" : r.field === "status" ? "st" : ""}>
+          <div className="t-head"><b>{r.event}</b> <span className="muted">· {fmtDateTime(r.at)}</span></div>
+          {change(r) && <div className="t-body">{change(r)}</div>}
+          {r.note && <div className="t-note">{r.note}</div>}
+          <div className="t-by muted">{r.actor ? `بواسطة: ${r.actor}` : ""}{r.source && r.actor ? " · " : ""}{r.source && !["المشتكي", "المشتكى عليه"].includes(r.actor) ? r.source : ""}</div>
+        </li>
+      ))}
+    </ol>
   );
 }
 
@@ -1897,9 +1911,10 @@ function AdminViewers({ secret }) {
   // نص الرسالة لصاحب كلمة المرور
   const text = r => `رابط تقارير شكاوى لجنة الحج:\n${siteUrl()}#/reports\nكلمة المرور الخاصة بك: ${r.code}`;
 
-  // العرض: نموذج الإضافة، الكلمة الجديدة وزر النسخ، ثم القائمة
+  // العرض: مفتاح بطاقة التقارير، نموذج الإضافة، الكلمة الجديدة وزر النسخ، ثم القائمة
   return (
     <div>
+      <ReportCardSwitch secret={secret} />
       <form className="card" onSubmit={create}>
         <h2>كلمة مرور إدارة لشخص جديد</h2>
         {msg && <Alert type={msg.type}>{msg.text}</Alert>}
@@ -1933,6 +1948,47 @@ function AdminViewers({ secret }) {
   );
 }
 
+// مفتاح «إظهار بطاقة الشكوى في التقارير» (للاطلاع فقط): يُحفظ فوراً عند الضغط
+function ReportCardSwitch({ secret }) {
+  // الحالة المحفوظة (null = قيد التحميل) والرسالة
+  const [on, setOn] = useState(null);
+  const [msg, setMsg] = useState(null);
+
+  // جلب الحالة الحالية
+  useEffect(() => {
+    sb.rpc("admin_get_report_card", { p_secret: secret }).then(({ data, error }) => {
+      if (error) return setMsg({ type: "error", text: NET_ERR });
+      setOn(data === true);
+    });
+  }, [secret]);
+
+  // الحفظ عند الضغط؛ يعود المفتاح لوضعه إن فشل الحفظ
+  async function toggle(v) {
+    setOn(v); setMsg(null);
+    const { error } = await sb.rpc("admin_set_report_card", { p_secret: secret, p_on: v });
+    if (error) { setOn(!v); return setMsg({ type: "error", text: "تعذّر حفظ المفتاح، يرجى المحاولة مرة أخرى." }); }
+    setMsg({ type: "ok", text: v ? "تم الحفظ: أصحاب كلمات مرور الإدارة يرون بطاقة الشكوى (للاطلاع فقط)." : "تم الحفظ: بطاقة الشكوى مخفية في التقارير." });
+  }
+
+  // العرض: بطاقة فيها المفتاح ووصف حالته
+  return (
+    <div className="card">
+      <h2>بطاقة الشكوى في التقارير</h2>
+      {msg && <Alert type={msg.type}>{msg.text}</Alert>}
+      {on === null ? (!msg && <Loading />) : (
+        <label className={`switch-row ${on ? "on" : ""}`}>
+          <input type="checkbox" checked={on} onChange={e => toggle(e.target.checked)} />
+          <span className="switch" aria-hidden="true"></span>
+          <span>
+            <b>إظهار بطاقة الشكوى في التقارير 👁️</b>
+            <small className="muted" style={{ display: "block" }}>{on ? "ظاهرة: الضغط على شكوى في التقارير يعرض تفاصيلها وجلساتها وسجلها للاطلاع فقط" : "مخفية: التقارير تعرض الجدول والأعداد فقط"}</small>
+          </span>
+        </label>
+      )}
+    </div>
+  );
+}
+
 // =====================================================================
 // الصفحة 4: التقارير (‎#/reports)
 // =====================================================================
@@ -1943,6 +1999,13 @@ function ReportsPage({ code, viewerName }) {
   const [range, setRange] = useState({ from: toDateInput(new Date(now.getFullYear(), now.getMonth(), 1)), to: toDateInput(now) });
   const [rows, setRows] = useState(null);
   const [error, setError] = useState("");
+
+  // بطاقة الشكوى: هل سمح الأدمن بعرضها؟ ورقم الشكوى المفتوحة
+  const [cardOn, setCardOn] = useState(false);
+  const [openNum, setOpenNum] = useState(null);
+  useEffect(() => {
+    sb.rpc("viewer_card_enabled", { p_code: code }).then(({ data }) => setCardOn(data === true));
+  }, [code]);
 
   // جلب شكاوى الفترة عبر viewer_report؛ نهاية الفترة تشمل اليوم الأخير كاملاً
   const load = useCallback(async () => {
@@ -2005,7 +2068,8 @@ function ReportsPage({ code, viewerName }) {
                   </thead>
                   <tbody>
                     {rows.map(r => (
-                      <tr key={r.complaint_number} className={`status-row ${stClass(r.status)}`}>
+                      <tr key={r.complaint_number} className={`status-row ${stClass(r.status)} ${cardOn ? "clickable" : ""}`}
+                        onClick={cardOn ? () => setOpenNum(r.complaint_number) : undefined} title={cardOn ? "اضغط لعرض بطاقة الشكوى" : undefined}>
                         <td data-label="الحالة"><StatusBadge value={r.status} /></td>
                         <td data-label="رقم الشكوى"><b dir="ltr">{r.complaint_number}</b></td>
                         <td data-label="اسم المشتكي">{r.complainant_name}</td>
@@ -2020,8 +2084,93 @@ function ReportsPage({ code, viewerName }) {
               </div>
             )}
           </div>
+          {cardOn && rows.length > 0 && <p className="muted center" style={{ fontSize: 13.5 }}>👁️ اضغط على أي شكوى لعرض بطاقتها (للاطلاع فقط)</p>}
         </>
       )}
+      {openNum && <ReportCard code={code} number={openNum} onClose={() => setOpenNum(null)} />}
+    </div>
+  );
+}
+
+// بطاقة شكوى في التقارير (للاطلاع فقط): التفاصيل، الاعتراض، الجلسات، والسجل — بلا أي تعديل
+function ReportCard({ code, number, onClose }) {
+  // بيانات البطاقة ورسالة الخطأ
+  const [card, setCard] = useState(null);
+  const [error, setError] = useState("");
+
+  // جلب البطاقة عبر viewer_complaint_card (لا شيء إن أوقف الأدمن البطاقات)
+  useEffect(() => {
+    sb.rpc("viewer_complaint_card", { p_code: code, p_number: number }).then(({ data, error }) => {
+      if (error) return setError(NET_ERR);
+      if (!data) return setError("عرض بطاقة الشكوى غير متاح حالياً.");
+      setCard(data);
+    });
+  }, [code, number]);
+
+  // سطر بيانات: عنوان وقيمة
+  const Row = ({ label, children }) => <div><dt>{label}</dt><dd>{children || <span className="muted">—</span>}</dd></div>;
+  const c = card && card.complaint;
+
+  // العرض: نافذة فوق الصفحة فيها البطاقة للقراءة فقط
+  return (
+    <div className="modal-back" onClick={onClose}>
+      <div className="modal" onClick={e => e.stopPropagation()}>
+        <div className="modal-close"><button className="btn secondary sm" onClick={onClose}>✕ إغلاق</button></div>
+        {error ? <Alert type="error">{error}</Alert> : !card ? <div className="card"><Loading /></div> : (
+          <div className={`card status-card ${stClass(c.status)}`}>
+            <div className="c-head">
+              <div>
+                <div className="c-no">{c.complaint_number}</div>
+                <div className="meta"><span>📅 {fmtDateTime(c.received_date)}</span><span className="readonly-tag">👁️ للاطلاع فقط</span></div>
+              </div>
+              <StatusBadge value={c.status} />
+            </div>
+            <dl className="detail-grid">
+              <Row label="اسم المشتكي">{c.complainant_name}</Row>
+              <Row label="رقم التواصل"><span dir="ltr">{c.contact_number}</span></Row>
+              <Row label="المشتكى عليه">{c.accused_name}</Row>
+              <Row label="التصنيف">{c.classification}</Row>
+              <Row label="ترحيل / مُحالة إلى">{c.referred_to}</Row>
+              <Row label="تاريخ الإغلاق">{c.closed_date && fmtDate(c.closed_date)}</Row>
+            </dl>
+            <div className="field-label">نص الشكوى</div>
+            <div className="subject">{c.subject}</div>
+            <div className="field-label">النتيجة</div>
+            <div className="subject">{c.result || <span className="muted">لم تصدر بعد</span>}</div>
+            {c.objection_at && (
+              <div className="sessions">
+                <h3>⚖️ اعتراض المشتكى عليه</h3>
+                <div className="muted" style={{ fontSize: 13.5 }}>قُدّم في {fmtDateTime(c.objection_at)}</div>
+                <div className="subject" style={{ marginTop: 6 }}>{c.objection_text}</div>
+              </div>
+            )}
+            <div className="sessions">
+              <h3>🗓️ الجلسات ({card.sessions.length})</h3>
+              {card.sessions.length === 0 ? <p className="muted" style={{ margin: 0 }}>لا توجد جلسات.</p> : (
+                <div className="table-wrap" style={{ maxHeight: 280, border: "1px solid var(--line)" }}>
+                  <table className="sheet">
+                    <thead><tr><th>التاريخ والوقت</th><th>ترحيل / مُحالة إلى</th><th>نتيجة الجلسة</th><th>الحالة</th></tr></thead>
+                    <tbody>
+                      {card.sessions.map((s, i) => (
+                        <tr key={i} className={`status-row ${stClass(s.status)}`} style={{ cursor: "default" }}>
+                          <td>{fmtDateTime(s.session_at)}</td>
+                          <td>{s.referred_to || <span className="muted">—</span>}</td>
+                          <td className="wrap">{s.result || <span className="muted">—</span>}</td>
+                          <td><StatusBadge value={s.status} /></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+            <div className="sessions">
+              <h3>📜 سجل الشكوى ({card.log.length})</h3>
+              {card.log.length === 0 ? <p className="muted" style={{ margin: 0 }}>لا توجد أحداث مسجّلة.</p> : <Timeline rows={card.log} />}
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

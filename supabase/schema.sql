@@ -40,6 +40,8 @@
 --                مرة واحدة (objection_view / submit_objection / admin_set_objection_code).
 --    2026-09-29  القسم 12: سجل الشكوى وسجل الإحالة (complaint_log + مشغّلات)، ومهلة الاعتراض
 --                (objection_deadline) مع تمديد استثنائي بسبب إلزامي؛ الاعتراض بعد المهلة يُرفض (EXPIRED).
+--    2026-09-29  القسم 10ب: بطاقة الشكوى في التقارير للاطلاع فقط (تفاصيل + جلسات + سجل)، يتحكم الأدمن
+--                بإظهارها عبر الإعداد report_card_enabled.
 -- =====================================================================
 
 -- ---------------------------------------------------------------------
@@ -118,6 +120,10 @@ drop function if exists public.sessions_after_delete() cascade;
 drop function if exists public.log_complaint(uuid, text, text, text, text, text, text);
 drop function if exists public.fmt_ts(timestamptz);
 drop table if exists public.complaint_log cascade;
+drop function if exists public.viewer_card_enabled(text);
+drop function if exists public.viewer_complaint_card(text, text);
+drop function if exists public.admin_get_report_card(text);
+drop function if exists public.admin_set_report_card(text, boolean);
 drop function if exists public.setting(text);
 
 -- تفعيل pgcrypto لتوليد أرقام عشوائية آمنة
@@ -214,7 +220,7 @@ create table public.app_settings (
 );
 
 -- الافتراضي: كلمة مرور خاصة، وزر التقديم المباشر ظاهر
-insert into public.app_settings (key, value) values ('access_mode', 'private'), ('direct_enabled', 'on');
+insert into public.app_settings (key, value) values ('access_mode', 'private'), ('direct_enabled', 'on'), ('report_card_enabled', 'on');
 
 -- ---------------------------------------------------------------------
 -- 5) دوال مساعدة (داخلية — لا تُستدعى من الموقع)
@@ -854,6 +860,77 @@ end $$;
 -- السماح للموقع باستدعاء دالتي التقارير
 grant execute on function public.viewer_login(text)                            to anon, authenticated;
 grant execute on function public.viewer_report(text, timestamptz, timestamptz) to anon, authenticated;
+
+-- ---------------------------------------------------------------------
+-- 10ب) بطاقة الشكوى في التقارير (للاطلاع فقط) — يتحكم الأدمن بإظهارها (report_card_enabled)
+-- ---------------------------------------------------------------------
+-- هل البطاقة مفعّلة؟ (لكلمة مرور إدارة صحيحة فقط)
+create or replace function public.viewer_card_enabled(p_code text)
+returns boolean
+language plpgsql security definer set search_path = public as $$
+begin
+  if public.verify_password('إدارة', p_code) is null then
+    return false;
+  end if;
+  return coalesce(public.setting('report_card_enabled'), 'off') = 'on';
+end $$;
+
+-- بطاقة شكوى للاطلاع: التفاصيل + الجلسات + السجل (JSON)؛ لا شيء إن كانت البطاقة موقوفة
+create or replace function public.viewer_complaint_card(p_code text, p_number text)
+returns json
+language plpgsql security definer set search_path = public as $$
+declare
+  v_id uuid;
+begin
+  if public.verify_password('إدارة', p_code) is null
+     or coalesce(public.setting('report_card_enabled'), 'off') <> 'on' then
+    return null;
+  end if;
+  select id into v_id from public.complaints where complaint_number = p_number;
+  if v_id is null then
+    return null;
+  end if;
+  return json_build_object(
+    'complaint', (select row_to_json(x) from (
+        select complaint_number, received_date, complainant_name, contact_number, accused_name, subject,
+               classification, referred_to, status, result, closed_date, objection_text, objection_at
+        from public.complaints where id = v_id) x),
+    'sessions', coalesce((select json_agg(s order by s.session_at desc) from (
+        select session_at, referred_to, result, status from public.sessions where complaint_id = v_id) s), '[]'::json),
+    'log', coalesce((select json_agg(l order by l.at desc) from (
+        select at, event, field, old_value, new_value, actor, source, note
+        from public.complaint_log where complaint_id = v_id) l), '[]'::json)
+  );
+end $$;
+
+-- الأدمن: قراءة مفتاح البطاقة وتغييره
+create or replace function public.admin_get_report_card(p_secret text)
+returns boolean
+language plpgsql security definer set search_path = public as $$
+begin
+  if public.verify_password('أدمن', p_secret) is null then
+    return null;
+  end if;
+  return coalesce(public.setting('report_card_enabled'), 'off') = 'on';
+end $$;
+
+create or replace function public.admin_set_report_card(p_secret text, p_on boolean)
+returns boolean
+language plpgsql security definer set search_path = public as $$
+begin
+  if public.verify_password('أدمن', p_secret) is null then
+    return null;
+  end if;
+  insert into public.app_settings (key, value) values ('report_card_enabled', case when p_on then 'on' else 'off' end)
+    on conflict (key) do update set value = excluded.value;
+  return p_on;
+end $$;
+
+-- السماح للموقع باستدعائها (محمية بكلمة المرور داخلها)
+grant execute on function public.viewer_card_enabled(text)             to anon, authenticated;
+grant execute on function public.viewer_complaint_card(text, text)     to anon, authenticated;
+grant execute on function public.admin_get_report_card(text)           to anon, authenticated;
+grant execute on function public.admin_set_report_card(text, boolean)  to anon, authenticated;
 
 -- ---------------------------------------------------------------------
 -- 12) سجل الشكوى (ومنه سجل الإحالة) ومهلة الاعتراض
