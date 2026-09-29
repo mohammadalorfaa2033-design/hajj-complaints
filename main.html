@@ -8,7 +8,7 @@
 
   الصفحات:
     1) المشتكي (الرابط الأساسي): خانة كلمة المرور أولاً (عامة أو خاصة حسب إعداد الأدمن)، وتحتها
-       زر «تقديم شكوى مباشرة» إن فعّله الأدمن ← الاسم، رقم التواصل، اسم المشتكى عليه، نص الاعتراض
+       زر «تقديم شكوى مباشرة» إن فعّله الأدمن ← الاسم، الهاتف، واتس/تلغرام، المشتكى عليه، عنوان الاعتراض، نص الاعتراض
        ← «تم تسجيل الشكوى بنجاح» مع رقم الشكوى ورمز المتابعة.
     2) نتيجة الشكوى (‎#/result): الشكاوى المحفوظة على الجهاز تلقائياً، أو بالرقم + رمز المتابعة
        ← الحالة والنتيجة وتاريخ الإغلاق فقط.
@@ -48,6 +48,8 @@
                 «كلمات مرور الإدارة» لإظهارها أو إخفائها.
     2026-09-29  التصدير إلى Excel ‎.xlsx (بدل CSV): تصدير كامل بأربع أوراق (الشكاوى، الجلسات، سجل الشكاوى،
                 سجل الإحالة)، وتصدير الجدول الظاهر، وتصدير التقرير؛ مكتبة SheetJS تُحمَّل عند أول تصدير فقط.
+    2026-09-29  نموذج الشكوى: عنوان الاعتراض، رقم الهاتف للاتصال (إلزامي)، رقم واتس/تلغرام (اختياري)،
+                حذف 00 من بداية الأرقام، وزر 🎤 لتحويل الكلام إلى نص؛ الحقول الجديدة في الجدول والتقارير والتصدير.
 =======================================================================
 -->
 <html lang="ar" dir="rtl">
@@ -277,6 +279,13 @@
   .detail-grid dt { color: var(--muted); font-size: 13px; }
   .detail-grid dd { margin: 2px 0 0; font-weight: 700; overflow-wrap: anywhere; }
 
+  /* عنوان الاعتراض في نافذة الشكوى */
+  .c-title { font-weight: 800; font-size: 16px; margin-top: 10px; }
+
+  /* زر التسجيل الصوتي أثناء الاستماع: أحمر نابض */
+  .btn.danger-mic { background: var(--danger); animation: pulse 1.2s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .7; } }
+
   /* مهلة الاعتراض: أخضر فاتح، وأحمر عند انتهائها */
   .deadline { background: var(--ok-soft); color: var(--ok); border-radius: 9px; padding: 7px 12px; margin-bottom: 10px; font-size: 14px; }
   .deadline.over { background: var(--danger-soft); color: var(--danger); }
@@ -465,11 +474,11 @@ async function exportAllToExcel(secret, complaints) {
   const log = l.data || [];
   await saveWorkbook([
     { name: "الشكاوى",
-      headers: ["رقم الشكوى", "تاريخ الشكوى", "الحالة", "المشتكي", "رقم التواصل", "المشتكى عليه", "نص الشكوى", "التصنيف",
-                "مُحالة إلى", "النتيجة", "تاريخ الإغلاق", "رمز المتابعة", "تنبيه المتابعة", "المطلوب عند التنبيه",
+      headers: ["رقم الشكوى", "تاريخ الشكوى", "الحالة", "عنوان الاعتراض", "المشتكي", "رقم الهاتف", "واتس / تلغرام", "المشتكى عليه",
+                "نص الشكوى", "التصنيف", "مُحالة إلى", "النتيجة", "تاريخ الإغلاق", "رمز المتابعة", "تنبيه المتابعة", "المطلوب عند التنبيه",
                 "ملخص للمشتكى عليه", "آخر موعد للاعتراض", "نص الاعتراض", "تاريخ الاعتراض", "آخر تعديل"],
-      rows: complaints.map(c => [c.complaint_number, xlDate(c.received_date), c.status, c.complainant_name, c.contact_number,
-                c.accused_name, c.subject, c.classification, c.referred_to, c.result, xlDate(c.closed_date), c.tracking_code,
+      rows: complaints.map(c => [c.complaint_number, xlDate(c.received_date), c.status, c.title, c.complainant_name, c.phone_number,
+                c.contact_number, c.accused_name, c.subject, c.classification, c.referred_to, c.result, xlDate(c.closed_date), c.tracking_code,
                 xlDate(c.reminder_at), c.reminder_note, c.objection_summary, xlDate(c.objection_deadline), c.objection_text,
                 xlDate(c.objection_at), xlDate(c.updated_at)]) },
     { name: "الجلسات",
@@ -651,23 +660,28 @@ function ComplainantPage() {
   );
 }
 
-// نموذج الشكوى: الاسم، رقم التواصل، اسم المشتكى عليه، نص الاعتراض (الرقم والرمز والتاريخ تلقائية)
+// نموذج الشكوى: الاسم، الهاتف، واتس/تلغرام، المشتكى عليه، عنوان الاعتراض، نص الاعتراض (مع زر التحدث)
+// (رقم الشكوى ورمز المتابعة والتاريخ تلقائية)
 function ComplaintForm({ code, onDone, onRejected }) {
   // بيانات النموذج وحالة الإرسال
-  const [form, setForm] = useState({ name: "", contact: "", accused: "", subject: "" });
+  const [form, setForm] = useState({ name: "", phone: "", contact: "", accused: "", title: "", subject: "" });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const set = key => e => setForm(f => ({ ...f, [key]: e.target.value }));
+  const setPhone = key => e => setForm(f => ({ ...f, [key]: cleanPhone(e.target.value) }));
 
   // الإرسال عبر submit_complaint؛ تُرجع رقم الشكوى ورمز المتابعة
   async function submit(e) {
     e.preventDefault();
     setError("");
-    if (!form.name.trim() || !form.contact.trim() || !form.accused.trim() || !form.subject.trim()) return setError("يرجى تعبئة جميع الحقول.");
-    if (!/^\+?[0-9٠-٩\s-]{7,20}$/.test(form.contact.trim())) return setError("رقم التواصل غير صالح. اكتب الأرقام فقط، مع رمز الدولة إن وُجد.");
+    if (!form.name.trim() || !form.phone || !form.accused.trim() || !form.title.trim() || !form.subject.trim())
+      return setError("يرجى تعبئة جميع الحقول المطلوبة.");
+    if (!/^\d{7,15}$/.test(form.phone)) return setError("رقم الهاتف غير صالح. اكتب الأرقام فقط مع رمز الدولة.");
+    if (form.contact && !/^\d{7,15}$/.test(form.contact)) return setError("رقم واتس / تلغرام غير صالح. اكتب الأرقام فقط مع رمز الدولة.");
     setBusy(true);
     const { data, error: rpcErr } = await sb.rpc("submit_complaint", {
-      p_code: code, p_complainant_name: form.name, p_contact_number: form.contact, p_accused_name: form.accused, p_subject: form.subject,
+      p_code: code, p_complainant_name: form.name, p_phone_number: form.phone, p_contact_number: form.contact,
+      p_accused_name: form.accused, p_title: form.title, p_subject: form.subject,
     });
     setBusy(false);
     if (rpcErr && rpcErr.message.includes("INVALID_CODE"))
@@ -676,7 +690,7 @@ function ComplaintForm({ code, onDone, onRejected }) {
     onDone(data[0]);
   }
 
-  // العرض: الحقول الثلاثة وزر الإرسال، ورابط معرفة النتيجة
+  // العرض: الحقول، وزر التحدث بجانب نص الاعتراض، وزر الإرسال، ورابط معرفة النتيجة
   return (
     <div className="narrow">
       <div className="page-head">
@@ -687,14 +701,73 @@ function ComplaintForm({ code, onDone, onRejected }) {
         {error && <Alert type="error">{error}</Alert>}
         <div className="grid" style={{ gridTemplateColumns: "1fr" }}>
           <Field label="اسمك" required><input type="text" value={form.name} onChange={set("name")} maxLength={200} autoComplete="name" /></Field>
-          <Field label="رقم التواصل" required hint="مثال: 963912345678+"><input type="tel" dir="ltr" value={form.contact} onChange={set("contact")} maxLength={20} autoComplete="tel" /></Field>
+          <Field label="رقم الهاتف للاتصال" required hint="مع رمز الدولة، مثال: 963912345678 — لا حاجة لكتابة 00 في البداية">
+            <input type="tel" inputMode="tel" dir="ltr" value={form.phone} onChange={setPhone("phone")} maxLength={15} autoComplete="tel" />
+          </Field>
+          <Field label="رقم واتس / تلغرام" hint="اختياري — إن كان مختلفاً عن رقم الهاتف">
+            <input type="tel" inputMode="tel" dir="ltr" value={form.contact} onChange={setPhone("contact")} maxLength={15} />
+          </Field>
           <Field label="اسم المشتكى عليه" required><input type="text" value={form.accused} onChange={set("accused")} maxLength={200} /></Field>
-          <Field label="نص الاعتراض" required><textarea value={form.subject} onChange={set("subject")} maxLength={5000} placeholder="اشرح تفاصيل الشكوى: ماذا حدث، ومتى، وأين…" style={{ minHeight: 150 }} /></Field>
+          <Field label="عنوان الاعتراض" required hint="عنوان قصير، مثال: تأخر الحافلة"><input type="text" value={form.title} onChange={set("title")} maxLength={150} /></Field>
+          <div className="field">
+            <div className="row" style={{ justifyContent: "space-between" }}>
+              <span className="field-label">نص الاعتراض<b className="req">*</b></span>
+              <MicButton onText={t => setForm(f => ({ ...f, subject: (f.subject ? f.subject.replace(/\s*$/, " ") : "") + t }))} onError={setError} />
+            </div>
+            <textarea value={form.subject} onChange={set("subject")} maxLength={5000} placeholder="اشرح تفاصيل الشكوى: ماذا حدث، ومتى، وأين… أو اضغط 🎤 وتحدّث" style={{ minHeight: 150 }} />
+          </div>
         </div>
         <button className="btn block" style={{ marginTop: 18 }} disabled={busy}>{busy ? "جارٍ الإرسال…" : "إرسال الشكوى"}</button>
       </form>
       <ResultLink />
     </div>
+  );
+}
+
+// تنظيف رقم الهاتف أثناء الكتابة: الأرقام العربية ← إنجليزية، أرقام فقط، وحذف 00 من البداية
+function cleanPhone(v) {
+  return String(v || "").replace(/[٠-٩]/g, d => "٠١٢٣٤٥٦٧٨٩".indexOf(d)).replace(/\D/g, "").replace(/^00/, "").slice(0, 15);
+}
+
+// زر 🎤 تحويل الكلام إلى نص (يظهر فقط في المتصفحات التي تدعمه، مثل Chrome على الجوال والحاسوب)
+function MicButton({ onText, onError }) {
+  // هل المتصفح يدعم التعرّف على الكلام؟ وهل التسجيل جارٍ؟
+  const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const [listening, setListening] = useState(false);
+  const recRef = React.useRef(null);
+
+  // إيقاف التسجيل عند مغادرة الصفحة
+  useEffect(() => () => { try { recRef.current && recRef.current.stop(); } catch {} }, []);
+  if (!Recognition) return null;
+
+  // بدء التسجيل بالعربية؛ كل جملة مكتملة تُضاف إلى النص
+  function start() {
+    const rec = new Recognition();
+    rec.lang = "ar-SA";
+    rec.continuous = true;
+    rec.interimResults = false;
+    rec.onresult = e => {
+      for (let i = e.resultIndex; i < e.results.length; i++)
+        if (e.results[i].isFinal) onText(e.results[i][0].transcript.trim());
+    };
+    rec.onerror = e => {
+      setListening(false);
+      if (e.error === "not-allowed" || e.error === "service-not-allowed") onError("اسمح للمتصفح باستخدام الميكروفون لتحويل الكلام إلى نص.");
+      else if (e.error !== "no-speech" && e.error !== "aborted") onError("تعذّر تحويل الكلام إلى نص، يمكنك الكتابة يدوياً.");
+    };
+    rec.onend = () => setListening(false);
+    recRef.current = rec;
+    try { rec.start(); setListening(true); onError(""); } catch { setListening(false); }
+  }
+
+  // إيقاف التسجيل
+  function stop() { try { recRef.current && recRef.current.stop(); } catch {} setListening(false); }
+
+  // العرض: زر تحدّث / إيقاف
+  return (
+    <button type="button" className={`btn sm ${listening ? "danger-mic" : "secondary"}`} onClick={listening ? stop : start}>
+      {listening ? "⏹ إيقاف التسجيل" : "🎤 تحدّث بدل الكتابة"}
+    </button>
   );
 }
 
@@ -898,6 +971,7 @@ function ResultCard({ r }) {
         </div>
         <StatusBadge value={r.status} />
       </div>
+      {r.title && <div className="c-title" style={{ marginTop: 0, marginBottom: 8 }}>📝 {r.title}</div>}
       <div className="field-label">النتيجة</div>
       <div className="subject" style={{ marginBottom: 6 }}>{r.result || "لم تصدر النتيجة بعد، ستتابع اللجنة شكواك."}</div>
       {r.closed_date && <div className="muted">تاريخ الإغلاق: {fmtDate(r.closed_date)}</div>}
@@ -1041,8 +1115,10 @@ const muted = v => v || <span className="muted">—</span>;
 const COLUMNS = [
   { key: "number", label: "رقم الشكوى", sort: c => c.complaint_number, text: c => c.complaint_number, cell: c => <b dir="ltr">{c.complaint_number}</b> },
   { key: "date", label: "التاريخ", sort: c => new Date(c.received_date).getTime(), text: c => xlDate(c.received_date), cell: c => fmtDate(c.received_date) },
+  { key: "title", label: "العنوان", sort: c => c.title, text: c => c.title, cell: c => c.title ? <b>{c.title}</b> : muted() },
   { key: "name", label: "المشتكي", sort: c => c.complainant_name, text: c => c.complainant_name, cell: c => c.complainant_name },
-  { key: "contact", label: "رقم التواصل", sort: c => c.contact_number, text: c => c.contact_number, cell: c => <span dir="ltr">{c.contact_number || "—"}</span> },
+  { key: "phone", label: "رقم الهاتف", sort: c => c.phone_number, text: c => c.phone_number, cell: c => <span dir="ltr">{c.phone_number || "—"}</span> },
+  { key: "contact", label: "واتس / تلغرام", sort: c => c.contact_number, text: c => c.contact_number, cell: c => <span dir="ltr">{c.contact_number || "—"}</span> },
   { key: "accused", label: "المشتكى عليه", sort: c => c.accused_name, text: c => c.accused_name, cell: c => muted(c.accused_name) },
   { key: "subject", label: "الموضوع", sort: c => c.subject, text: c => c.subject, wrap: true, cell: c => <span className="clip">{c.subject}</span> },
   { key: "class", label: "التصنيف", sort: c => c.classification, text: c => c.classification, cell: c => muted(c.classification) },
@@ -1309,7 +1385,7 @@ function AdminComplaints({ secret, rows, onSaved, reload, onOpen }) {
   const term = search.trim();
   const visible = (rows || []).filter(c =>
     (filter === "الكل" || c.status === filter) &&
-    (!term || [c.complaint_number, c.complainant_name, c.contact_number, c.accused_name, c.subject, c.tracking_code, c.access_code, c.referred_to].some(v => (v || "").includes(term))));
+    (!term || [c.complaint_number, c.title, c.complainant_name, c.phone_number, c.contact_number, c.accused_name, c.subject, c.tracking_code, c.access_code, c.referred_to].some(v => (v || "").includes(term))));
   const count = s => (rows || []).filter(c => s === "الكل" || c.status === s).length;
 
   // العرض: أزرار التصفية مع الأعداد، البحث، ثم الجدول
@@ -1404,9 +1480,11 @@ function ComplaintCard({ secret, complaint: c, onSaved, onSessionsChanged }) {
       {alerts.map((a, i) => <div key={i} className={`reminder-bar ${a.level}`}>{a.level === "later" ? "🗓️" : "⏰"} {a.text}</div>)}
       <div className="meta" style={{ fontSize: 14.5, color: "var(--ink)" }}>
         <span>👤 المشتكي: <b>{c.complainant_name}</b></span>
-        <span>📞 <b dir="ltr">{c.contact_number || "—"}</b></span>
+        <span>📞 <b dir="ltr">{c.phone_number || "—"}</b></span>
+        {c.contact_number && <span>💬 واتس/تلغرام: <b dir="ltr">{c.contact_number}</b></span>}
         <span>⚠️ المشتكى عليه: <b>{c.accused_name || "—"}</b></span>
       </div>
+      {c.title && <div className="c-title">📝 {c.title}</div>}
       <div className="subject">{c.subject}</div>
       {msg && <Alert type={msg.type}>{msg.text}</Alert>}
       <div className="grid">
@@ -1450,7 +1528,7 @@ const defaultDeadline = () => { const d = new Date(); d.setDate(d.getDate() + OB
 
 function ObjectionSection({ secret, complaint: c, onSaved }) {
   // الملخص، آخر موعد، وضع النموذج (generate / extend)، بيانات التمديد، والرسائل
-  const [summary, setSummary] = useState(c.objection_summary || c.subject || "");
+  const [summary, setSummary] = useState(c.objection_summary || [c.title, c.subject].filter(Boolean).join("\n") || "");
   const [deadline, setDeadline] = useState(defaultDeadline);
   const [mode, setMode] = useState(null);
   const [ext, setExt] = useState({ at: defaultDeadline(), reason: "" });
@@ -2137,7 +2215,7 @@ function ReportsPage({ code, viewerName }) {
               <div className="table-wrap" style={{ maxHeight: "none" }}>
                 <table className="stack">
                   <thead>
-                    <tr><th>الحالة</th><th>رقم الشكوى</th><th>اسم المشتكي</th><th>المشتكى عليه</th><th>الموضوع</th><th>النتيجة</th><th>تاريخ الإغلاق</th></tr>
+                    <tr><th>الحالة</th><th>رقم الشكوى</th><th>العنوان</th><th>اسم المشتكي</th><th>المشتكى عليه</th><th>الموضوع</th><th>النتيجة</th><th>تاريخ الإغلاق</th></tr>
                   </thead>
                   <tbody>
                     {rows.map(r => (
@@ -2145,6 +2223,7 @@ function ReportsPage({ code, viewerName }) {
                         onClick={cardOn ? () => setOpenNum(r.complaint_number) : undefined} title={cardOn ? "اضغط لعرض بطاقة الشكوى" : undefined}>
                         <td data-label="الحالة"><StatusBadge value={r.status} /></td>
                         <td data-label="رقم الشكوى"><b dir="ltr">{r.complaint_number}</b></td>
+                        <td data-label="العنوان"><b>{r.title || "—"}</b></td>
                         <td data-label="اسم المشتكي">{r.complainant_name}</td>
                         <td data-label="المشتكى عليه">{r.accused_name || "—"}</td>
                         <td data-label="الموضوع" className="subj">{r.subject}</td>
@@ -2161,8 +2240,8 @@ function ReportsPage({ code, viewerName }) {
           {rows.length > 0 && (
             <div className="center" style={{ marginTop: 12 }}>
               <button className="btn secondary" onClick={() => saveWorkbook([{ name: "تقرير الشكاوى",
-                headers: ["الحالة", "رقم الشكوى", "تاريخ الشكوى", "اسم المشتكي", "المشتكى عليه", "الموضوع", "النتيجة", "تاريخ الإغلاق"],
-                rows: rows.map(r => [r.status, r.complaint_number, xlDate(r.received_date), r.complainant_name, r.accused_name, r.subject, r.result, xlDate(r.closed_date)]) }],
+                headers: ["الحالة", "رقم الشكوى", "تاريخ الشكوى", "العنوان", "اسم المشتكي", "المشتكى عليه", "الموضوع", "النتيجة", "تاريخ الإغلاق"],
+                rows: rows.map(r => [r.status, r.complaint_number, xlDate(r.received_date), r.title, r.complainant_name, r.accused_name, r.subject, r.result, xlDate(r.closed_date)]) }],
                 `تقرير-الشكاوى-${range.from || "الكل"}-${range.to || ""}.xlsx`).catch(e => setError(e.message || NET_ERR))}>⬇ تصدير التقرير (Excel)</button>
             </div>
           )}
@@ -2208,12 +2287,14 @@ function ReportCard({ code, number, onClose }) {
             </div>
             <dl className="detail-grid">
               <Row label="اسم المشتكي">{c.complainant_name}</Row>
-              <Row label="رقم التواصل"><span dir="ltr">{c.contact_number}</span></Row>
+              <Row label="رقم الهاتف"><span dir="ltr">{c.phone_number}</span></Row>
+              <Row label="واتس / تلغرام"><span dir="ltr">{c.contact_number}</span></Row>
               <Row label="المشتكى عليه">{c.accused_name}</Row>
               <Row label="التصنيف">{c.classification}</Row>
               <Row label="ترحيل / مُحالة إلى">{c.referred_to}</Row>
               <Row label="تاريخ الإغلاق">{c.closed_date && fmtDate(c.closed_date)}</Row>
             </dl>
+            {c.title && <div className="c-title" style={{ marginTop: 0, marginBottom: 8 }}>📝 {c.title}</div>}
             <div className="field-label">نص الشكوى</div>
             <div className="subject">{c.subject}</div>
             <div className="field-label">النتيجة</div>

@@ -43,6 +43,8 @@
 --    2026-09-29  القسم 10ب: بطاقة الشكوى في التقارير للاطلاع فقط (تفاصيل + جلسات + سجل)، يتحكم الأدمن
 --                بإظهارها عبر الإعداد report_card_enabled.
 --    2026-09-29  admin_export_log: سجل كل الشكاوى للتصدير إلى ملف Excel.
+--    2026-09-29  القسم 14: عنوان الاعتراض (title)، رقم الهاتف للاتصال (phone_number)، وcontact_number صار
+--                «واتس / تلغرام» (اختياري)؛ normalize_phone تحذف 00 من بداية الأرقام.
 -- =====================================================================
 
 -- ---------------------------------------------------------------------
@@ -122,6 +124,8 @@ drop function if exists public.log_complaint(uuid, text, text, text, text, text,
 drop function if exists public.fmt_ts(timestamptz);
 drop table if exists public.complaint_log cascade;
 drop function if exists public.admin_export_log(text);
+drop function if exists public.submit_complaint(text, text, text, text, text, text, text);
+drop function if exists public.normalize_phone(text);
 drop function if exists public.viewer_card_enabled(text);
 drop function if exists public.viewer_complaint_card(text, text);
 drop function if exists public.admin_get_report_card(text);
@@ -1258,7 +1262,143 @@ grant execute on function public.admin_set_objection_deadline(text, uuid, timest
 grant execute on function public.objection_view(text, text)                                   to anon, authenticated;
 
 -- ---------------------------------------------------------------------
--- 13) كلمة مرور الأدمن الأولى — غيّر 'غيّرني-123' قبل التنفيذ (6 أحرف على الأقل)
+-- 14) عنوان الاعتراض، ورقم الهاتف للاتصال، ورقم واتس/تلغرام (مع حذف 00 من بداية الأرقام)
+--     يُنفَّذ وحده أيضاً كتحديث لقاعدة موجودة (لا يحذف بيانات)
+-- ---------------------------------------------------------------------
+-- الحقلان الجديدان: عنوان قصير للاعتراض، ورقم الهاتف للاتصال (contact_number صار «واتس / تلغرام»)
+alter table public.complaints add column if not exists title        text;   -- عنوان الاعتراض
+alter table public.complaints add column if not exists phone_number text;   -- رقم الهاتف للاتصال
+
+-- توحيد رقم الهاتف: الأرقام العربية ← إنجليزية، أرقام فقط، وحذف 00 من البداية (00963… ← 963…)
+create or replace function public.normalize_phone(p text)
+returns text language sql immutable as $$
+  select nullif(regexp_replace(
+           regexp_replace(translate(coalesce(p, ''), '٠١٢٣٤٥٦٧٨٩', '0123456789'), '\D', '', 'g'),
+           '^00', ''), '');
+$$;
+
+-- تقديم الشكوى (النسخة الجديدة): الاسم، الهاتف (إلزامي)، واتس/تلغرام (اختياري)، المشتكى عليه،
+-- عنوان الاعتراض، ونص الاعتراض؛ تُرجع رقم الشكوى ورمز المتابعة
+drop function if exists public.submit_complaint(text, text, text, text, text);
+drop function if exists public.submit_complaint(text, text, text, text, text, text, text);
+create function public.submit_complaint(
+  p_code             text,
+  p_complainant_name text,
+  p_phone_number     text,
+  p_contact_number   text,
+  p_accused_name     text,
+  p_title            text,
+  p_subject          text
+) returns table (complaint_number text, tracking_code text)
+language plpgsql security definer set search_path = public as $$
+declare
+  v_mode    text := coalesce(public.setting('access_mode'), 'private');
+  v_code    text := public.normalize_code(p_code);
+  v_phone   text := public.normalize_phone(p_phone_number);
+  v_contact text := public.normalize_phone(p_contact_number);
+  v_pw_id   uuid;
+  v_id      uuid;
+begin
+  -- الحقول الإلزامية وأطوالها (واتس/تلغرام اختياري)
+  if coalesce(btrim(p_complainant_name), '') = '' or v_phone is null
+     or coalesce(btrim(p_accused_name), '') = '' or coalesce(btrim(p_title), '') = ''
+     or coalesce(btrim(p_subject), '') = '' then
+    raise exception 'الحقول الإلزامية ناقصة';
+  end if;
+  if length(p_complainant_name) > 200 or length(v_phone) > 20 or length(coalesce(v_contact, '')) > 20
+     or length(p_accused_name) > 200 or length(p_title) > 150 or length(p_subject) > 5000 then
+    raise exception 'تجاوزت البيانات الطول المسموح';
+  end if;
+
+  -- التحقق من الدخول؛ كلمة المرور الخاصة تُستهلك (مرة واحدة)
+  if not public.code_valid(p_code) then
+    raise exception 'INVALID_CODE';
+  end if;
+  if v_code <> '' and v_mode = 'private' then
+    update public.access_passwords set used_at = now()
+     where role = 'مشتكي' and password = v_code and active and used_at is null
+    returning id into v_pw_id;
+    if v_pw_id is null then
+      raise exception 'INVALID_CODE';
+    end if;
+  end if;
+
+  -- تسجيل الشكوى (الرقم والرمز والتاريخ من المشغّل)
+  insert into public.complaints as c (complainant_name, phone_number, contact_number, accused_name, title, subject, access_code)
+  values (btrim(p_complainant_name), v_phone, v_contact, btrim(p_accused_name), btrim(p_title), btrim(p_subject),
+          case when v_pw_id is not null then v_code end)
+  returning c.id, c.complaint_number, c.tracking_code into v_id, complaint_number, tracking_code;
+  if v_pw_id is not null then
+    update public.access_passwords set complaint_id = v_id where id = v_pw_id;
+  end if;
+  return next;
+end $$;
+
+-- معرفة النتيجة (نسخة تُرجع عنوان الاعتراض ليتعرّف المشتكي على شكواه)
+drop function if exists public.track_complaint(text, text);
+create function public.track_complaint(p_number text, p_code text)
+returns table (complaint_number text, title text, status text, result text, received_date timestamptz, closed_date timestamptz)
+language sql stable security definer set search_path = public as $$
+  select c.complaint_number, c.title, c.status, c.result, c.received_date, c.closed_date
+  from public.complaints c
+  where upper(c.complaint_number) = upper(btrim(coalesce(p_number, '')))
+    and c.tracking_code = regexp_replace(translate(coalesce(p_code, ''), '٠١٢٣٤٥٦٧٨٩', '0123456789'), '\D', '', 'g');
+$$;
+
+-- تقرير الإدارة (نسخة تُرجع عنوان الاعتراض)
+drop function if exists public.viewer_report(text, timestamptz, timestamptz);
+create function public.viewer_report(p_code text, p_from timestamptz, p_to timestamptz)
+returns table (complaint_number text, status text, complainant_name text, accused_name text, title text,
+               subject text, result text, received_date timestamptz, closed_date timestamptz)
+language plpgsql security definer set search_path = public as $$
+begin
+  if public.verify_password('إدارة', p_code) is null then
+    return;
+  end if;
+  return query
+    select c.complaint_number, c.status, c.complainant_name, c.accused_name, c.title,
+           c.subject, c.result, c.received_date, c.closed_date
+    from public.complaints c
+    where (p_from is null or c.received_date >= p_from)
+      and (p_to   is null or c.received_date <  p_to)
+    order by c.received_date desc;
+end $$;
+
+-- بطاقة التقارير (نسخة تُرجع العنوان ورقمي الهاتف)
+create or replace function public.viewer_complaint_card(p_code text, p_number text)
+returns json
+language plpgsql security definer set search_path = public as $$
+declare
+  v_id uuid;
+begin
+  if public.verify_password('إدارة', p_code) is null
+     or coalesce(public.setting('report_card_enabled'), 'off') <> 'on' then
+    return null;
+  end if;
+  select id into v_id from public.complaints where complaint_number = p_number;
+  if v_id is null then
+    return null;
+  end if;
+  return json_build_object(
+    'complaint', (select row_to_json(x) from (
+        select complaint_number, received_date, complainant_name, phone_number, contact_number, accused_name, title, subject,
+               classification, referred_to, status, result, closed_date, objection_text, objection_at
+        from public.complaints where id = v_id) x),
+    'sessions', coalesce((select json_agg(s order by s.session_at desc) from (
+        select session_at, referred_to, result, status from public.sessions where complaint_id = v_id) s), '[]'::json),
+    'log', coalesce((select json_agg(l order by l.at desc) from (
+        select at, event, field, old_value, new_value, actor, source, note
+        from public.complaint_log where complaint_id = v_id) l), '[]'::json)
+  );
+end $$;
+
+-- السماح للموقع باستدعاء الدوال الجديدة والمستبدلة
+grant execute on function public.submit_complaint(text, text, text, text, text, text, text) to anon, authenticated;
+grant execute on function public.track_complaint(text, text)                               to anon, authenticated;
+grant execute on function public.viewer_report(text, timestamptz, timestamptz)             to anon, authenticated;
+
+-- ---------------------------------------------------------------------
+-- 15) كلمة مرور الأدمن الأولى — غيّر 'غيّرني-123' قبل التنفيذ (6 أحرف على الأقل)
 -- ---------------------------------------------------------------------
 insert into public.access_passwords (role, password, holder_name)
 values ('أدمن', '12345', 'المدير');
