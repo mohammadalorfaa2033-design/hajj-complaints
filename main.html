@@ -53,6 +53,8 @@
     2026-09-29  ثلاث نتائج (نتيجة الشكوى الداخلية، ما يراه المشتكي، ما يراه المعترض) — الجلسات تُرحِّل إلى
                 الداخلية فقط؛ الجلسات تُعدَّل ولا تُحذف؛ فتح شكوى من «المطلوب» يطلب تحديد التنبيه القادم والمطلوب عنده.
     2026-09-29  مربع «المطلوب»: زر «إغلاق الشكوى بدلاً من ذلك»، ومربع أخضر «ستُغلق» عند اختيار «مغلقة».
+    2026-09-29  تغيير الحالة تلقائياً: فتح شكوى «جديد» ← «قيد المراجعة»؛ حالة الجلسة «جاري المتابعة» أو «مغلقة» فقط؛
+                (والاعتراض على شكوى مغلقة يعيدها إلى «قيد المراجعة» — في قاعدة البيانات).
 =======================================================================
 -->
 <html lang="ar" dir="rtl">
@@ -1066,7 +1068,15 @@ function AdminPage({ secret }) {
   const [openId, setOpenId] = useState(null);
   const [openFromDue, setOpenFromDue] = useState(false);   // فُتحت من «المطلوب» ← طلب تحديد التنبيه القادم
   const [sessVer, setSessVer] = useState(0);
-  const openComplaint = (c, fromDue = false) => { setOpenFromDue(fromDue); setOpenId(c.id); };
+  // فتح شكوى: إن كانت «جديد» تتحول تلقائياً إلى «قيد المراجعة» (admin_open_complaint) قبل عرضها
+  const openComplaint = async (c, fromDue = false) => {
+    const row = (rows || []).find(r => r.id === c.id) || c;
+    if (row.status === "جديد") {
+      const { data } = await sb.rpc("admin_open_complaint", { p_secret: secret, p_id: c.id });
+      if (data && data.length) onSaved(data[0]);
+    }
+    setOpenFromDue(fromDue); setOpenId(c.id);
+  };
 
   // جلب كل الشكاوى
   const load = useCallback(async () => {
@@ -1763,9 +1773,13 @@ function Timeline({ rows }) {
 // ---------------------------------------------------------------------
 // قسم الجلسات داخل تفاصيل الشكوى: سجل جلساتها + إضافة جلسة أو تعديلها (لا حذف)؛
 // قيم أحدث جلسة تُرحَّل إلى الشكوى، والنتيجة إلى «نتيجة الشكوى» الداخلية فقط
+// حالات الجلسة: بدء الجلسات يعني «جاري المتابعة»، أو إغلاق الشكوى
+const SESSION_STATUSES = ["جاري المتابعة", CLOSED];
+const sessionStatus = s => SESSION_STATUSES.includes(s) ? s : "جاري المتابعة";
+
 function SessionsSection({ secret, complaint, onApplied, onChanged }) {
   // سجل الجلسات، النموذج (جلسة جديدة أو تعديل جلسة: editId)، والرسائل
-  const blank = () => ({ at: toDateTimeInput(new Date()), referred_to: complaint.referred_to || "", result: "", status: complaint.status });
+  const blank = () => ({ at: toDateTimeInput(new Date()), referred_to: complaint.referred_to || "", result: "", status: sessionStatus(complaint.status) });
   const [list, setList] = useState(null);
   const [form, setForm] = useState(blank);
   const [editId, setEditId] = useState(null);
@@ -1784,7 +1798,7 @@ function SessionsSection({ secret, complaint, onApplied, onChanged }) {
   // بدء تعديل جلسة: تعبئة النموذج بقيمها
   function startEdit(s) {
     setEditId(s.id);
-    setForm({ at: toDateTimeInput(s.session_at), referred_to: s.referred_to || "", result: s.result || "", status: s.status });
+    setForm({ at: toDateTimeInput(s.session_at), referred_to: s.referred_to || "", result: s.result || "", status: sessionStatus(s.status) });
     setMsg(null);
   }
 
@@ -1836,8 +1850,8 @@ function SessionsSection({ secret, complaint, onApplied, onChanged }) {
         <div className="grid">
           <Field label="التاريخ والوقت" required><input type="datetime-local" value={form.at} onChange={set("at")} /></Field>
           <Field label="ترحيل / مُحالة إلى"><input type="text" value={form.referred_to} onChange={set("referred_to")} maxLength={200} placeholder="الجهة أو الشخص" /></Field>
-          <Field label="حالة الشكوى" required>
-            <select value={form.status} onChange={set("status")}>{STATUSES.map(x => <option key={x}>{x}</option>)}</select>
+          <Field label="حالة الشكوى بعد الجلسة" required hint="بدء الجلسات يجعل الشكوى «جاري المتابعة» تلقائياً">
+            <select value={form.status} onChange={set("status")}>{SESSION_STATUSES.map(x => <option key={x}>{x}</option>)}</select>
           </Field>
           <Field label="نتيجة الجلسة" full><textarea style={{ minHeight: 70 }} value={form.result} onChange={set("result")} maxLength={2000} /></Field>
         </div>

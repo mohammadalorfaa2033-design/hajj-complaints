@@ -47,6 +47,8 @@
 --                «واتس / تلغرام» (اختياري)؛ normalize_phone تحذف 00 من بداية الأرقام.
 --    2026-09-29  القسم 16: ثلاث نتائج (نتيجة الشكوى الداخلية، ما يراه المشتكي، ما يراه المعترض)؛ الجلسات
 --                تُرحِّل إلى الداخلية فقط؛ تعديل الجلسات (admin_update_session) وإلغاء حذفها.
+--    2026-09-29  القسم 18: تغيير الحالة تلقائياً — فتح «جديد» ← «قيد المراجعة»، الجلسات ← «جاري المتابعة»،
+--                الاعتراض على «مغلقة» ← «قيد المراجعة».
 -- =====================================================================
 
 -- ---------------------------------------------------------------------
@@ -130,6 +132,8 @@ drop function if exists public.submit_complaint(text, text, text, text, text, te
 drop function if exists public.normalize_phone(text);
 drop function if exists public.admin_update_session(text, uuid, timestamptz, text, text, text);
 drop function if exists public.sessions_after_update() cascade;
+drop function if exists public.admin_open_complaint(text, uuid);
+drop function if exists public.sessions_before_write() cascade;
 drop function if exists public.admin_update_complaint(text, uuid, text, text, text, text, text, text, timestamptz, timestamptz, text);
 drop function if exists public.viewer_card_enabled(text);
 drop function if exists public.viewer_complaint_card(text, text);
@@ -1610,7 +1614,85 @@ grant execute on function public.admin_update_complaint(text, uuid, text, text, 
 grant execute on function public.objection_view(text, text) to anon, authenticated;
 
 -- ---------------------------------------------------------------------
--- 17) كلمة مرور الأدمن الأولى — غيّر 'غيّرني-123' قبل التنفيذ (6 أحرف على الأقل)
+-- 18) تغيير الحالة تلقائياً
+--     1) فتح الأدمن شكوى «جديد»           ← «قيد المراجعة»
+--     2) أي جلسة للشكوى                    ← «جاري المتابعة» (أو «مغلقة» إن اختيرت)
+--     3) اعتراض على شكوى «مغلقة»           ← «قيد المراجعة» (إعادة فتح لدراستها من جديد)
+--     يُنفَّذ وحده أيضاً كتحديث لقاعدة موجودة (لا يحذف بيانات)
+-- ---------------------------------------------------------------------
+-- 1) فتح شكوى من لوحة الأدمن: «جديد» ← «قيد المراجعة»؛ تُرجع الشكوى (بعد التحديث إن تغيّرت)
+create or replace function public.admin_open_complaint(p_secret text, p_id uuid)
+returns setof public.complaints
+language plpgsql security definer set search_path = public as $$
+begin
+  if public.verify_password('أدمن', p_secret) is null then
+    return;
+  end if;
+  perform set_config('app.source', 'فتح الشكوى', true);
+  update public.complaints set status = 'قيد المراجعة' where id = p_id and status = 'جديد';
+  return query select * from public.complaints where id = p_id;
+end $$;
+grant execute on function public.admin_open_complaint(text, uuid) to anon, authenticated;
+
+-- 2) قبل حفظ أي جلسة: الحالة «جديد» أو «قيد المراجعة» تصبح «جاري المتابعة» (بدء الجلسات = بدء المتابعة)
+create or replace function public.sessions_before_write()
+returns trigger language plpgsql as $$
+begin
+  if new.status in ('جديد', 'قيد المراجعة') then
+    new.status := 'جاري المتابعة';
+  end if;
+  return new;
+end $$;
+
+-- ربطها بجدول الجلسات قبل كل إضافة وتعديل
+drop trigger if exists trg_sessions_before_write on public.sessions;
+create trigger trg_sessions_before_write
+  before insert or update on public.sessions
+  for each row execute function public.sessions_before_write();
+
+-- 3) تقديم الاعتراض (نسخة تعيد فتح الشكوى المغلقة إلى «قيد المراجعة» لدراستها من جديد)
+create or replace function public.submit_objection(p_number text, p_code text, p_text text)
+returns text
+language plpgsql security definer set search_path = public as $$
+declare
+  v_id       uuid;
+  v_done     timestamptz;
+  v_deadline timestamptz;
+begin
+  if coalesce(btrim(p_text), '') = '' then
+    raise exception 'نص الاعتراض فارغ';
+  end if;
+  if length(p_text) > 5000 then
+    raise exception 'تجاوز النص الطول المسموح';
+  end if;
+  select c.id, c.objection_at, c.objection_deadline into v_id, v_done, v_deadline
+  from public.complaints c
+  where upper(c.complaint_number) = upper(btrim(coalesce(p_number, '')))
+    and c.objection_code is not null
+    and c.objection_code = regexp_replace(translate(coalesce(p_code, ''), '٠١٢٣٤٥٦٧٨٩', '0123456789'), '\D', '', 'g')
+  for update;
+  if v_id is null then
+    return 'INVALID';
+  end if;
+  if v_done is not null then
+    return 'ALREADY';
+  end if;
+  if v_deadline is not null and now() > v_deadline then
+    return 'EXPIRED';
+  end if;
+  -- المنفّذ والمصدر في سجل الشكوى: المشتكى عليه / اعتراض
+  perform set_config('app.actor', 'المشتكى عليه', true);
+  perform set_config('app.source', 'اعتراض', true);
+  update public.complaints set
+    objection_text = btrim(p_text),
+    objection_at   = now(),
+    status         = case when status = 'مغلقة' then 'قيد المراجعة' else status end
+  where id = v_id;
+  return 'OK';
+end $$;
+
+-- ---------------------------------------------------------------------
+-- 19) كلمة مرور الأدمن الأولى — غيّر 'غيّرني-123' قبل التنفيذ (6 أحرف على الأقل)
 -- ---------------------------------------------------------------------
 insert into public.access_passwords (role, password, holder_name)
 values ('أدمن', '12345', 'المدير');
