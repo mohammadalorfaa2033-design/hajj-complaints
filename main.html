@@ -14,7 +14,7 @@
        ← الحالة والنتيجة وتاريخ الإغلاق فقط.
     2ب) الاعتراض (‎#/objection): المشتكى عليه برقم الشكوى + رمز الاعتراض ← الملخص فقط ← اعتراض واحد.
     3) الأدمن (‎#/admin): «المطلوب» (تنبيهات ذكية) وجدول الشكاوى (اختيار عدة صفوف وتغييرها معاً،
-       وتصدير Excel)، إعدادات دخول المشتكين، وكلمات مرور الإدارة.
+       وتصدير Excel)، «الروابط» (رسائل جاهزة للنسخ)، إعدادات دخول المشتكين، وكلمات مرور الإدارة، و«الإعدادات» (التصفير).
     4) التقارير (‎#/reports): بكلمة مرور الإدارة — أعداد الشكاوى خلال فترة وجدول بحالاتها.
 
   ملاحظات:
@@ -59,6 +59,8 @@
                 أيقونة عين بدل القرد في إظهار كلمة المرور؛ «تذكّرني على هذا الجهاز» لكلمتي الأدمن والتقارير
                 (localStorage) مع اسم حساب مخفي ليعرض المتصفح حفظ كلمة المرور؛ تحويل الكلام إلى نص يعيد التشغيل
                 تلقائياً على الجوال ويعرض النص أثناء الكلام؛ تبويب «⚙️ الإعدادات» لتصفير المنصة برمز تصفير خاص.
+    2026-09-30  تبويب «🔗 الروابط»: كل روابط المنصة في مكان واحد، وزر يولّد كلمة مرور للمشتكي وينسخ رسالتها
+                (أو الكلمة العامة)، وزر ينسخ رابط التقارير مع كلمة مرور الشخص المختار من الإدارة.
 =======================================================================
 -->
 <html lang="ar" dir="rtl">
@@ -308,6 +310,11 @@
   /* قسم التصفير: إطار أحمر تحذيري */
   .danger-zone { border: 2px solid #f1b5b0; background: #fff8f7; }
   .danger-zone h2 { color: var(--danger); }
+
+  /* تبويب الروابط: مربع الرسالة الجاهزة (أخضر فاتح)، والرابط الطويل يلتف بدل أن يوسّع الصفحة */
+  .ready-msg { background: #f0f8f3; border: 2px solid #9fd3b1; }
+  .ready-msg textarea { width: 100%; font-size: 16px; direction: rtl; resize: vertical; }
+  .link-url { font-size: 13px; overflow-wrap: anywhere; text-align: left; }
   .danger-zone ul { margin: 0 0 12px; padding-inline-start: 20px; line-height: 1.9; }
   .btn.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
   .btn.danger:disabled { opacity: .5; cursor: not-allowed; }
@@ -1188,6 +1195,7 @@ function AdminPage({ secret }) {
         <button className={tab === "today" ? "active" : ""} onClick={() => setTab("today")}>
           📅 المطلوب{dueCount > 0 && <span className="tab-count">{dueCount}</span>}
         </button>
+        <button className={tab === "links" ? "active" : ""} onClick={() => setTab("links")}>🔗 الروابط</button>
         <button className={tab === "complaints" ? "active" : ""} onClick={() => setTab("complaints")}>📋 الشكاوى</button>
         <button className={tab === "sessions" ? "active" : ""} onClick={() => setTab("sessions")}>🗓️ الجلسات</button>
         <button className={tab === "access" ? "active" : ""} onClick={() => setTab("access")}>🔐 دخول المشتكين</button>
@@ -1196,6 +1204,7 @@ function AdminPage({ secret }) {
       </div>
       {error && <Alert type="error">{error}</Alert>}
       {tab === "today" && <AdminDue secret={secret} rows={rows} onSaved={onSaved} reload={reload} onOpen={c => openComplaint(c, true)} />}
+      {tab === "links" && <AdminLinks secret={secret} />}
       {tab === "complaints" && <AdminComplaints secret={secret} rows={rows} onSaved={onSaved} reload={reload} onOpen={c => openComplaint(c)} />}
       {tab === "sessions" && <AdminSessions secret={secret} version={sessVer} onOpen={c => openComplaint(c)} />}
       {tab === "access" && <AdminAccess secret={secret} />}
@@ -2086,6 +2095,136 @@ function AdminSessions({ secret, version, onOpen }) {
             </table>
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// تبويب الروابط: كل روابط المنصة في مكان واحد، مع رسالة جاهزة للنسخ لكل من يتواصل
+//   مشتكٍ ← الرابط + كلمة المرور (خاصة تُولَّد بضغطة، أو العامة المحفوظة)
+//   الإدارة ← رابط التقارير + كلمة مرور الشخص المختار
+// ---------------------------------------------------------------------
+function AdminLinks({ secret }) {
+  // إعدادات الدخول، أصحاب كلمات مرور الإدارة، ملاحظة المشتكي، الشخص المختار، الرسالة الجاهزة، والحالة
+  const [access, setAccess] = useState(null);
+  const [viewers, setViewers] = useState(null);
+  const [note, setNote] = useState("");
+  const [viewerId, setViewerId] = useState("");
+  const [ready, setReady] = useState(null);      // { title, text, copied }
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  // جلب نوع كلمة مرور المشتكين وقائمة كلمات مرور الإدارة الفعّالة
+  useEffect(() => {
+    sb.rpc("admin_get_access", { p_secret: secret }).then(({ data, error }) => {
+      if (error || !data || !data.length) return setErr(NET_ERR);
+      setAccess(data[0]);
+    });
+    sb.rpc("admin_list_viewers", { p_secret: secret }).then(({ data }) => setViewers((data || []).filter(v => v.active)));
+  }, [secret]);
+
+  // تجهيز الرسالة: تظهر في مربع أعلى الصفحة (مع الصعود إليه)، وتُنسخ مباشرة
+  // (وإن منع المتصفح النسخ يبقى زر «نسخ مرة أخرى» في المربع)
+  async function prepare(title, text) {
+    const copied = await copyText(text);
+    setReady({ title, text, copied });
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  // مشتكٍ بكلمة مرور خاصة: توليد كلمة جديدة (4 أرقام لمرة واحدة) ثم تجهيز رسالتها
+  async function forComplainant() {
+    setErr("");
+    if (access.mode === "general") {
+      if (!access.general_password) return setErr("لم تُحفظ كلمة مرور عامة بعد (تبويب «دخول المشتكين»).");
+      return prepare("رسالة المشتكي", `لتقديم شكوى إلى إدارة الحج والعمرة (قسم الشكاوى) افتح الرابط:\n${siteUrl()}\nكلمة المرور: ${access.general_password}`);
+    }
+    setBusy(true);
+    const { data, error } = await sb.rpc("admin_create_code", { p_secret: secret, p_note: note });
+    setBusy(false);
+    if (error || !data || !data.length) return setErr("تعذّر توليد كلمة المرور، يرجى المحاولة مرة أخرى.");
+    setNote("");
+    prepare(`رسالة المشتكي — كلمة المرور ${data[0].code}`, `لتقديم شكواك إلى إدارة الحج والعمرة (قسم الشكاوى) افتح الرابط:\n${siteUrl()}\nكلمة المرور الخاصة بك: ${data[0].code}`);
+  }
+
+  // الإدارة: رابط التقارير مع كلمة مرور الشخص المختار
+  function forViewer() {
+    setErr("");
+    const v = (viewers || []).find(x => x.id === viewerId);
+    if (!v) return setErr("اختر الشخص أولاً.");
+    prepare(`رسالة التقارير — ${v.name}`, `رابط تقارير قسم الشكاوى — إدارة الحج والعمرة:\n${siteUrl()}#/reports\nكلمة المرور الخاصة بك: ${v.code}`);
+  }
+
+  // الروابط الأخرى (نسخ الرابط وحده)
+  const OTHER = [
+    ["📝 صفحة تقديم الشكوى", siteUrl()],
+    ["🔎 صفحة نتيجة الشكوى", `${siteUrl()}#/result`],
+    ["⚖️ صفحة الاعتراض", `${siteUrl()}#/objection`],
+    ["📊 صفحة التقارير", `${siteUrl()}#/reports`],
+    ["🛠️ صفحة الأدمن (لك فقط)", `${siteUrl()}#/admin`],
+  ];
+
+  // العرض: الرسالة الجاهزة أعلى الصفحة، ثم بطاقة المشتكي، بطاقة الإدارة، وقائمة الروابط
+  if (!access) return err ? <Alert type="error">{err}</Alert> : <Loading />;
+  return (
+    <div>
+      {err && <Alert type="error">{err}</Alert>}
+      {ready && (
+        <div className="card ready-msg">
+          <h2>{ready.copied ? "✅ تم نسخ الرسالة — الصقها في المحادثة" : "📋 الرسالة جاهزة"}</h2>
+          <div className="muted" style={{ marginBottom: 6 }}>{ready.title}</div>
+          <textarea readOnly rows={4} value={ready.text} onFocus={e => e.target.select()} />
+          <button type="button" className="btn secondary block" style={{ marginTop: 8 }}
+            onClick={async () => { const copied = await copyText(ready.text); setReady(r => ({ ...r, copied })); }}>
+            📋 نسخ مرة أخرى
+          </button>
+        </div>
+      )}
+
+      <div className="card">
+        <h2>👤 تواصل معي شخص يريد تقديم شكوى</h2>
+        {access.mode === "general" ? (
+          <p className="muted">الوضع الحالي: كلمة مرور عامة — تُرسل له الرابط مع الكلمة العامة.</p>
+        ) : (
+          <Field label="لمن؟ (اختياري)" hint="اسم الشخص أو رقمه، للتذكير في قائمة كلمات المرور">
+            <input type="text" value={note} onChange={e => setNote(e.target.value)} maxLength={200} />
+          </Field>
+        )}
+        <button type="button" className="btn gold block" style={{ marginTop: 12 }} disabled={busy} onClick={forComplainant}>
+          {busy ? "جارٍ التوليد…" : access.mode === "general" ? "📋 نسخ الرابط مع كلمة المرور" : "🔑 توليد كلمة مرور ونسخ الرسالة"}
+        </button>
+      </div>
+
+      <div className="card">
+        <h2>🏢 تواصلت معي الإدارة (رابط التقارير)</h2>
+        {viewers === null ? <Loading /> : viewers.length === 0 ? (
+          <p className="muted">لا توجد كلمات مرور إدارة فعّالة. أضف الشخص أولاً من تبويب «كلمات مرور الإدارة».</p>
+        ) : (
+          <>
+            <Field label="الشخص">
+              <select value={viewerId} onChange={e => setViewerId(e.target.value)}>
+                <option value="">— اختر —</option>
+                {viewers.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
+              </select>
+            </Field>
+            <button type="button" className="btn gold block" style={{ marginTop: 12 }} onClick={forViewer}>📋 نسخ رابط التقارير مع كلمة المرور</button>
+          </>
+        )}
+      </div>
+
+      <div className="card">
+        <h2>🔗 روابط المنصة</h2>
+        <ul className="list">
+          {OTHER.map(([t, u]) => (
+            <li key={u}>
+              <div style={{ minWidth: 0 }}>
+                <b>{t}</b>
+                <div className="muted link-url" dir="ltr">{u}</div>
+              </div>
+              <button type="button" className="btn secondary sm" onClick={() => prepare(t, u)}>📋 نسخ</button>
+            </li>
+          ))}
+        </ul>
       </div>
     </div>
   );
