@@ -24,6 +24,7 @@
 //                اختياري بعد الاعتراض) ويُحفظ مع الشكوى.
 //    2026-09-30  زر «📄 تصدير ملف الشكوى (Word)» في تفاصيل الشكوى: ملف ‎.docx قابل للتعديل بالترويسة والترتيب المعتمد
 //                (بديل الأرشفة على Google Drive التي أُلغيت).
+//    2026-09-30  ملف Word: الترويسة الرسمية (letterhead.jpg) في رأس كل صفحة بدل الشعار والنص.
 // =======================================================================
 // استيراد خطافات React المستخدمة في المكونات
 const { useState, useEffect, useCallback } = React;
@@ -139,9 +140,9 @@ function loadDocx() {
   return docxPromise;
 }
 
-// بناء مستند Word للشكوى (sess: جلساتها، logo: بيانات صورة الشعار أو null)
-function buildComplaintDoc(D, c, sess, logo) {
-  const { Document, Paragraph, TextRun, Table, TableRow, TableCell, WidthType, ImageRun, BorderStyle, ShadingType } = D;
+// بناء مستند Word للشكوى (sess: جلساتها، logo: صورة الشعار، letterhead: صورة الترويسة الرسمية — أو null)
+function buildComplaintDoc(D, c, sess, logo, letterhead) {
+  const { Document, Paragraph, TextRun, Table, TableRow, TableCell, WidthType, ImageRun, BorderStyle, ShadingType, Header } = D;
   // ألوان الهوية والخط
   const GREEN = "00594F", GREEN2 = "006E5C", GOLD = "AD9E6E", INK = "333132", MUTED = "939598", SAND = "F5F1EA", FONT = "Arial";
 
@@ -175,15 +176,16 @@ function buildComplaintDoc(D, c, sess, logo) {
     para("نتيجة الجلسة:", { bold: true, before: 80, after: 40 }), ...box(s.result),
   ]);
 
-  // الترويسة: الشعار واسم الإدارة والقسم، ثم خط ذهبي
-  const head = [
+  // الترويسة: الصورة الرسمية (letterhead.jpg) في رأس كل صفحة، أو — إن تعذّر تحميلها — الشعار واسم الإدارة وخط ذهبي
+  const title = para(`ملف الشكوى ${c.complaint_number}`, { bold: true, size: 34, color: GREEN, after: 160 });
+  const head = letterhead ? [title] : [
     new Paragraph({ bidirectional: true, children: [
       ...(logo ? [new ImageRun({ data: logo, transformation: { width: 64, height: 62 } })] : []),
       new TextRun({ text: "  إدارة الحج والعمرة", font: FONT, size: 32, bold: true, color: GREEN, rightToLeft: true }),
       new TextRun({ text: "قسم الشكاوى", font: FONT, size: 24, color: GOLD, rightToLeft: true, break: 1 }),
     ] }),
     new Paragraph({ border: { bottom: { style: BorderStyle.SINGLE, size: 12, color: GOLD, space: 4 } }, spacing: { after: 200 }, children: [] }),
-    para(`ملف الشكوى ${c.complaint_number}`, { bold: true, size: 34, color: GREEN, after: 160 }),
+    title,
   ];
 
   // المحتوى بالترتيب المعتمد
@@ -209,7 +211,11 @@ function buildComplaintDoc(D, c, sess, logo) {
   );
   body.push(para(`أُعدّ من منصة الشكاوى في ${xlDate(new Date())}`, { size: 18, color: MUTED, before: 400 }));
 
-  return new Document({ sections: [{ properties: { page: { margin: { top: 1000, bottom: 1000, left: 1000, right: 1000 } } }, children: [...head, ...body] }] });
+  // الصفحة: A4 بهوامش 1000 (≈1.8 سم)؛ مع الترويسة يتسع الهامش العلوي لصورتها (عرض المحتوى × 590/2480)
+  const headers = letterhead ? { default: new Header({ children: [new Paragraph({ children: [
+    new ImageRun({ data: letterhead, transformation: { width: 660, height: 157 } })] })] }) } : undefined;
+  const margin = { top: letterhead ? 3000 : 1000, bottom: 1000, left: 1000, right: 1000, header: 450 };
+  return new Document({ sections: [{ headers, properties: { page: { margin } }, children: [...head, ...body] }] });
 }
 
 // التصدير: جلب جلسات الشكوى والشعار، بناء المستند، ثم تنزيله
@@ -218,9 +224,10 @@ async function exportComplaintWord(secret, c) {
   const s = await sb.rpc("admin_list_sessions", { p_secret: secret, p_complaint_id: c.id });
   if (s.error) throw new Error(NET_ERR);
   const sess = (s.data || []).slice().sort((a, b) => new Date(a.session_at) - new Date(b.session_at));
-  let logo = null;
-  try { const r = await fetch("logo.png"); if (r.ok) logo = new Uint8Array(await r.arrayBuffer()); } catch {}
-  const blob = await D.Packer.toBlob(buildComplaintDoc(D, c, sess, logo));
+  // صورتا الترويسة والشعار من موقع المنصة
+  const img = async name => { try { const r = await fetch(name); return r.ok ? new Uint8Array(await r.arrayBuffer()) : null; } catch { return null; } };
+  const [letterhead, logo] = await Promise.all([img("letterhead.jpg"), img("logo.png")]);
+  const blob = await D.Packer.toBlob(buildComplaintDoc(D, c, sess, logo, letterhead));
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
   a.download = `ملف-الشكوى-${c.complaint_number}.docx`;
