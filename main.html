@@ -71,6 +71,8 @@
                 قبل نتيجتها؛ قائمتا «التصنيفات» و«الصفات» تُعدَّلان من «الإعدادات» مع تصفية الشكاوى بالتصنيف؛
                 حذف سجل الشكوى وسجل الإحالة (من التفاصيل والتقارير وExcel)؛ سبب التمديد يظهر مع الاعتراض؛
                 إصلاح زر «مسح» بجانب خانة التاريخ (كان ينضغط إلى حرف «م»).
+    2026-09-30  «استعراض نسخة محفوظة»: فرز بالضغط على العناوين، تصفية بعمود وقيمة، اختيار الأعمدة، عدد الأسطر
+                مع صفحات، وبطاقة لكل صف (بكل الحقول، مع السابق/التالي).
 =======================================================================
 -->
 <html lang="ar" dir="rtl">
@@ -329,6 +331,13 @@
   .xl-view { max-height: 60vh; }
   .xl-view th { position: sticky; top: 0; background: #eef2ee; z-index: 1; }
   .xl-view td { max-width: 320px; white-space: pre-wrap; vertical-align: top; }
+  .xl-view tr.clickable { cursor: pointer; }
+  .xl-view tr.clickable:hover td { background: #f3f7f4; }
+  /* أدوات الاستعراض (بحث، تصفية، عدد الأسطر، الأعمدة) وقائمة اختيار الأعمدة */
+  .xl-tools { display: grid; gap: 8px; margin-bottom: 10px; }
+  .col-picker { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 4px 12px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: #fafbf9; }
+  .col-picker label { display: flex; align-items: center; gap: 6px; font-size: 14px; cursor: pointer; }
+  .xl-card dd { white-space: pre-wrap; }
 
   /* الصفة تحت الاسم في الجداول */
   .role-tag { display: block; font-size: 12px; color: var(--muted); font-weight: 400; }
@@ -1803,15 +1812,29 @@ function SeasonCard({ secret, reload }) {
 }
 
 // استعراض نسخة Excel محفوظة على الجهاز (للاطلاع فقط): يُقرأ الملف داخل المتصفح ولا يُرفع إلى أي مكان
-// ولا يغيّر شيئاً في المنصة. يعرض كل ورقة في تبويب، مع بحث، وأول 500 صف مطابق
+// ولا يغيّر شيئاً في المنصة. لكل ورقة: بحث، تصفية بعمود وقيمة، فرز بالضغط على العنوان، اختيار الأعمدة
+// الظاهرة، عدد الأسطر مع صفحات، والضغط على أي صف يفتح «بطاقته» بكل الحقول
 function ExcelViewer({ onClose }) {
-  // الملف المقروء {name, sheets:[{name, rows}]}، الورقة المعروضة، البحث، وحالة القراءة
+  // الملف المقروء {name, sheets:[{name, rows}]}، الورقة المعروضة، وحالة القراءة
   const [book, setBook] = useState(null);
   const [active, setActive] = useState(0);
-  const [search, setSearch] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const LIMIT = 500;
+  // أدوات العرض: البحث، التصفية {col, value}، الفرز {col, dir}، الأعمدة المخفية، عدد الأسطر، الصفحة، والبطاقة المفتوحة
+  const [search, setSearch] = useState("");
+  const [filt, setFilt] = useState({ col: "", value: "" });
+  const [sort, setSort] = useState({ col: null, dir: 1 });
+  const [hidden, setHidden] = useState([]);
+  const [showCols, setShowCols] = useState(false);
+  const [perPage, setPerPage] = useState(50);
+  const [page, setPage] = useState(0);
+  const [cardAt, setCardAt] = useState(null);
+
+  // إعادة أدوات العرض لوضعها الأول (عند فتح ملف أو تغيير الورقة)
+  function resetView() {
+    setSearch(""); setFilt({ col: "", value: "" }); setSort({ col: null, dir: 1 });
+    setHidden([]); setShowCols(false); setPage(0); setCardAt(null);
+  }
 
   // قراءة الملف المختار: كل ورقة ← مصفوفة صفوف (الصف الأول = العناوين)
   async function open(file) {
@@ -1822,18 +1845,51 @@ function ExcelViewer({ onClose }) {
       const wb = XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: true });
       const sheets = wb.SheetNames.map(n => ({ name: n,
         rows: XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, defval: "", raw: false, dateNF: "yyyy-mm-dd hh:mm" }) }));
-      setBook({ name: file.name, sheets }); setActive(0); setSearch("");
+      setBook({ name: file.name, sheets }); setActive(0); resetView();
     } catch (e) { setError("تعذّر قراءة الملف. تأكد أنه ملف Excel ‎(.xlsx)."); }
     setBusy(false);
   }
 
-  // الورقة الحالية: العناوين، والصفوف المطابقة للبحث
+  // الورقة الحالية: العناوين، والأعمدة الظاهرة (بأرقامها)
   const sheet = book && book.sheets[active];
   const head = sheet ? sheet.rows[0] || [] : [];
-  const term = search.trim();
-  const body = sheet ? sheet.rows.slice(1).filter(r => !term || r.some(v => String(v).includes(term))) : [];
+  const cols = head.map((h, i) => i).filter(i => !hidden.includes(i));
 
-  // العرض: نافذة فيها اختيار الملف، تبويبات الأوراق، البحث، ثم الجدول (بلا أي تعديل)
+  // الصفوف: البحث ← التصفية ← الفرز (الأرقام والتواريخ تُفرز كأرقام، والنص أبجدياً)
+  const term = search.trim();
+  let body = sheet ? sheet.rows.slice(1) : [];
+  if (term) body = body.filter(r => r.some(v => String(v).includes(term)));
+  if (filt.col !== "") body = body.filter(r => String(r[filt.col] ?? "") === filt.value);
+  if (sort.col !== null) {
+    const key = v => { const s = String(v ?? ""); return s !== "" && !isNaN(Number(s)) ? Number(s) : s; };
+    body = [...body].sort((a, b) => {
+      const x = key(a[sort.col]), y = key(b[sort.col]);
+      if (x === "" && y !== "") return 1;
+      if (y === "" && x !== "") return -1;
+      return (typeof x === "number" && typeof y === "number" ? x - y : String(x).localeCompare(String(y), "ar")) * sort.dir;
+    });
+  }
+
+  // القيم المختلفة في عمود التصفية (لقائمة الاختيار)
+  const values = filt.col === "" || !sheet ? [] :
+    [...new Set(sheet.rows.slice(1).map(r => String(r[filt.col] ?? "")))].sort((a, b) => a.localeCompare(b, "ar")).slice(0, 300);
+
+  // الصفحات
+  const pages = Math.max(1, Math.ceil(body.length / perPage));
+  const pg = Math.min(page, pages - 1);
+  const shown = body.slice(pg * perPage, pg * perPage + perPage);
+
+  // الضغط على عنوان: فرز تصاعدي ← تنازلي ← بلا فرز
+  const toggleSort = i => setSort(s => s.col !== i ? { col: i, dir: 1 } : s.dir === 1 ? { col: i, dir: -1 } : { col: null, dir: 1 });
+  const arrow = i => sort.col === i ? (sort.dir === 1 ? " ▲" : " ▼") : "";
+
+  // إظهار عمود أو إخفاؤه (يبقى عمود واحد على الأقل)
+  const toggleCol = i => setHidden(h => h.includes(i) ? h.filter(x => x !== i) : (head.length - h.length > 1 ? [...h, i] : h));
+
+  // البطاقة المفتوحة: رقمها ضمن الصفوف بعد البحث والتصفية والفرز
+  const card = cardAt !== null && body[cardAt];
+
+  // العرض: نافذة فيها اختيار الملف، تبويبات الأوراق، أدوات العرض، الجدول، الصفحات، ثم البطاقة
   return (
     <div className="modal-back" onClick={onClose}>
       <div className="modal xl-modal" onClick={e => e.stopPropagation()}>
@@ -1849,24 +1905,93 @@ function ExcelViewer({ onClose }) {
           <>
             <div className="tabs">
               {book.sheets.map((sh, i) => (
-                <button key={sh.name} className={i === active ? "active" : ""} onClick={() => { setActive(i); setSearch(""); }}>
+                <button key={sh.name} className={i === active ? "active" : ""} onClick={() => { setActive(i); resetView(); }}>
                   {sh.name} ({Math.max(0, sh.rows.length - 1)})
                 </button>
               ))}
             </div>
-            <input type="text" placeholder="بحث في هذه الورقة…" value={search} onChange={e => setSearch(e.target.value)} style={{ marginBottom: 10 }} />
-            {body.length === 0 ? <p className="muted center">لا توجد صفوف{term ? " مطابقة" : ""}.</p> : (
-              <div className="table-wrap xl-view">
-                <table>
-                  <thead><tr>{head.map((h, i) => <th key={i}>{h}</th>)}</tr></thead>
-                  <tbody>
-                    {body.slice(0, LIMIT).map((r, i) => <tr key={i}>{head.map((_, j) => <td key={j}>{r[j]}</td>)}</tr>)}
-                  </tbody>
-                </table>
+
+            <div className="xl-tools">
+              <input type="text" placeholder="🔍 بحث في هذه الورقة…" value={search} onChange={e => { setSearch(e.target.value); setPage(0); }} />
+              <div className="row" style={{ flexWrap: "nowrap" }}>
+                <select value={filt.col} onChange={e => { setFilt({ col: e.target.value === "" ? "" : Number(e.target.value), value: "" }); setPage(0); }} aria-label="تصفية حسب العمود">
+                  <option value="">⏷ تصفية حسب…</option>
+                  {head.map((h, i) => <option key={i} value={i}>{h}</option>)}
+                </select>
+                {filt.col !== "" && (
+                  <select value={filt.value} onChange={e => { setFilt(f => ({ ...f, value: e.target.value })); setPage(0); }} aria-label="القيمة">
+                    <option value="" disabled>اختر القيمة</option>
+                    {values.map(v => <option key={v} value={v}>{v || "(فارغ)"}</option>)}
+                  </select>
+                )}
+                {filt.col !== "" && <button type="button" className="btn danger-text" onClick={() => setFilt({ col: "", value: "" })}>مسح</button>}
               </div>
+              <div className="row">
+                <span className="field-label">عدد الأسطر</span>
+                <select value={perPage} onChange={e => { setPerPage(Number(e.target.value)); setPage(0); }} style={{ width: "auto" }}>
+                  {[10, 50, 100, 500].map(n => <option key={n} value={n}>{n}</option>)}
+                </select>
+                <button type="button" className="btn secondary sm" onClick={() => setShowCols(v => !v)}>⚙️ الأعمدة ({cols.length}/{head.length})</button>
+              </div>
+              {showCols && (
+                <div className="col-picker">
+                  {head.map((h, i) => (
+                    <label key={i}><input type="checkbox" checked={!hidden.includes(i)} onChange={() => toggleCol(i)} /> {h}</label>
+                  ))}
+                  <div className="row" style={{ marginTop: 6 }}>
+                    <button type="button" className="btn secondary sm" onClick={() => setHidden([])}>إظهار الكل</button>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {body.length === 0 ? <p className="muted center">لا توجد صفوف{term || filt.col !== "" ? " مطابقة" : ""}.</p> : (
+              <>
+                <div className="table-wrap xl-view">
+                  <table>
+                    <thead><tr>{cols.map(i => <th key={i} className="sortable" onClick={() => toggleSort(i)}>{head[i]}{arrow(i)}</th>)}</tr></thead>
+                    <tbody>
+                      {shown.map((r, k) => (
+                        <tr key={k} className="clickable" onClick={() => setCardAt(pg * perPage + k)} title="اضغط لعرض البطاقة">
+                          {cols.map(j => <td key={j}>{r[j]}</td>)}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="row" style={{ justifyContent: "space-between", marginTop: 8 }}>
+                  <span className="muted" style={{ fontSize: 13 }}>عرض {pg * perPage + 1}–{pg * perPage + shown.length} من {body.length} · اضغط على أي صف لعرض بطاقته</span>
+                  {pages > 1 && (
+                    <span className="row" style={{ gap: 6 }}>
+                      <button type="button" className="btn secondary sm" disabled={pg === 0} onClick={() => setPage(pg - 1)}>→ السابق</button>
+                      <span className="muted">{pg + 1} / {pages}</span>
+                      <button type="button" className="btn secondary sm" disabled={pg >= pages - 1} onClick={() => setPage(pg + 1)}>التالي ←</button>
+                    </span>
+                  )}
+                </div>
+              </>
             )}
-            {body.length > LIMIT && <p className="muted center" style={{ fontSize: 13 }}>يظهر أول {LIMIT} صف من {body.length} — استخدم البحث للوصول إلى صف محدد.</p>}
           </>
+        )}
+
+        {card && (
+          <div className="modal-back" onClick={() => setCardAt(null)}>
+            <div className="modal" onClick={e => e.stopPropagation()}>
+              <div className="card">
+                <div className="row" style={{ justifyContent: "space-between", marginBottom: 10 }}>
+                  <b>🗂️ بطاقة ({cardAt + 1} من {body.length}) <span className="readonly-tag">👁️ للاطلاع فقط</span></b>
+                  <button type="button" className="btn secondary sm" onClick={() => setCardAt(null)}>✕ إغلاق</button>
+                </div>
+                <dl className="detail-grid xl-card">
+                  {head.map((h, i) => <div key={i}><dt>{h}</dt><dd>{String(card[i] ?? "") || <span className="muted">—</span>}</dd></div>)}
+                </dl>
+                <div className="grid" style={{ gridTemplateColumns: "1fr 1fr", marginTop: 12 }}>
+                  <button type="button" className="btn secondary" disabled={cardAt === 0} onClick={() => setCardAt(cardAt - 1)}>→ السابق</button>
+                  <button type="button" className="btn secondary" disabled={cardAt >= body.length - 1} onClick={() => setCardAt(cardAt + 1)}>التالي ←</button>
+                </div>
+              </div>
+            </div>
+          </div>
         )}
       </div>
     </div>
