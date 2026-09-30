@@ -21,6 +21,7 @@
 --
 --  ملاحظات:
 --    - الموقع لا يقرأ أي جدول مباشرة؛ كل العمليات عبر دوال تتحقق من المدخلات داخلها.
+--    - رقم الشكوى: السنة-الرقم، مثل 2026-00006.
 --    - الحالات: جديد (البداية) / قيد المراجعة / جاري المتابعة / مغلقة (يُسجَّل تاريخ الإغلاق).
 --    - إيقاف المحاولات الخاطئة مُلغى بطلب الإدارة (ip_locked تُرجع false دائماً).
 --
@@ -49,6 +50,8 @@
 --                تُرحِّل إلى الداخلية فقط؛ تعديل الجلسات (admin_update_session) وإلغاء حذفها.
 --    2026-09-29  القسم 18: تغيير الحالة تلقائياً — فتح «جديد» ← «قيد المراجعة»، الجلسات ← «جاري المتابعة»،
 --                الاعتراض على «مغلقة» ← «قيد المراجعة».
+--    2026-09-30  القسم 20: رقم الشكوى بلا «HJ-» (2026-00006) مع تحويل الأرقام الحالية وقبول الصيغتين في البحث؛
+--                تصفير المنصة برمز خاص (set_reset_code / admin_reset_platform).
 -- =====================================================================
 
 -- ---------------------------------------------------------------------
@@ -134,6 +137,9 @@ drop function if exists public.admin_update_session(text, uuid, timestamptz, tex
 drop function if exists public.sessions_after_update() cascade;
 drop function if exists public.admin_open_complaint(text, uuid);
 drop function if exists public.sessions_before_write() cascade;
+drop function if exists public.normalize_number(text);
+drop function if exists public.set_reset_code(text);
+drop function if exists public.admin_reset_platform(text, text);
 drop function if exists public.admin_update_complaint(text, uuid, text, text, text, text, text, text, timestamptz, timestamptz, text);
 drop function if exists public.viewer_card_enabled(text);
 drop function if exists public.viewer_complaint_card(text, text);
@@ -1692,7 +1698,140 @@ begin
 end $$;
 
 -- ---------------------------------------------------------------------
--- 19) كلمة مرور الأدمن الأولى — غيّر 'غيّرني-123' قبل التنفيذ (6 أحرف على الأقل)
+-- 20) رقم الشكوى بلا «HJ-» (مثل 2026-00006)، وتصفير المنصة برمز خاص
+--     يُنفَّذ وحده أيضاً كتحديث لقاعدة موجودة
+--     رمز التصفير يُعيَّن مرة واحدة من SQL Editor:  select public.set_reset_code('رمز-طويل-سري');
+-- ---------------------------------------------------------------------
+-- رقم الشكوى الجديد: السنة-الرقم (2026-00006)
+create or replace function public.complaints_before_insert()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  new.complaint_number := to_char(now(), 'YYYY') || '-'
+                          || lpad(nextval('public.complaint_number_seq')::text, 5, '0');
+  new.tracking_code    := public.random_password(6, true);
+  new.received_date    := now();
+  new.updated_at       := now();
+  new.status           := 'جديد';
+  new.closed_date      := null;
+  return new;
+end $$;
+
+-- مرة واحدة: حذف «HJ-» من أرقام الشكاوى الحالية (المشغّلات موقوفة حتى لا يتغيّر «آخر تعديل»)
+alter table public.complaints disable trigger user;
+update public.complaints set complaint_number = regexp_replace(complaint_number, '^HJ-', '')
+ where complaint_number like 'HJ-%';
+alter table public.complaints enable trigger user;
+
+-- توحيد رقم شكوى مُدخل: أحرف كبيرة، بلا مسافات، الأرقام العربية ← إنجليزية، وحذف «HJ-» القديمة
+create or replace function public.normalize_number(p text)
+returns text language sql immutable as $$
+  select regexp_replace(upper(regexp_replace(translate(coalesce(p, ''), '٠١٢٣٤٥٦٧٨٩', '0123456789'), '\s', '', 'g')), '^HJ-', '');
+$$;
+
+-- معرفة النتيجة (يقبل الرقم بالصيغتين، ومع المسافات)
+create or replace function public.track_complaint(p_number text, p_code text)
+returns table (complaint_number text, title text, status text, result text, received_date timestamptz, closed_date timestamptz)
+language sql stable security definer set search_path = public as $$
+  select c.complaint_number, c.title, c.status, c.complainant_result, c.received_date, c.closed_date
+  from public.complaints c
+  where c.complaint_number = public.normalize_number(p_number)
+    and c.tracking_code = regexp_replace(translate(coalesce(p_code, ''), '٠١٢٣٤٥٦٧٨٩', '0123456789'), '\D', '', 'g');
+$$;
+
+-- ما يراه المعترض (يقبل الرقم بالصيغتين)
+create or replace function public.objection_view(p_number text, p_code text)
+returns table (complaint_number text, received_date timestamptz, summary text, objection_text text,
+               objection_at timestamptz, deadline timestamptz, result text)
+language sql stable security definer set search_path = public as $$
+  select c.complaint_number, c.received_date, c.objection_summary, c.objection_text, c.objection_at,
+         c.objection_deadline, c.accused_result
+  from public.complaints c
+  where c.complaint_number = public.normalize_number(p_number)
+    and c.objection_code is not null
+    and c.objection_code = regexp_replace(translate(coalesce(p_code, ''), '٠١٢٣٤٥٦٧٨٩', '0123456789'), '\D', '', 'g');
+$$;
+
+-- تقديم الاعتراض (يقبل الرقم بالصيغتين؛ ويعيد فتح الشكوى المغلقة إلى «قيد المراجعة»)
+create or replace function public.submit_objection(p_number text, p_code text, p_text text)
+returns text
+language plpgsql security definer set search_path = public as $$
+declare
+  v_id       uuid;
+  v_done     timestamptz;
+  v_deadline timestamptz;
+begin
+  if coalesce(btrim(p_text), '') = '' then
+    raise exception 'نص الاعتراض فارغ';
+  end if;
+  if length(p_text) > 5000 then
+    raise exception 'تجاوز النص الطول المسموح';
+  end if;
+  select c.id, c.objection_at, c.objection_deadline into v_id, v_done, v_deadline
+  from public.complaints c
+  where c.complaint_number = public.normalize_number(p_number)
+    and c.objection_code is not null
+    and c.objection_code = regexp_replace(translate(coalesce(p_code, ''), '٠١٢٣٤٥٦٧٨٩', '0123456789'), '\D', '', 'g')
+  for update;
+  if v_id is null then
+    return 'INVALID';
+  end if;
+  if v_done is not null then
+    return 'ALREADY';
+  end if;
+  if v_deadline is not null and now() > v_deadline then
+    return 'EXPIRED';
+  end if;
+  perform set_config('app.actor', 'المشتكى عليه', true);
+  perform set_config('app.source', 'اعتراض', true);
+  update public.complaints set
+    objection_text = btrim(p_text),
+    objection_at   = now(),
+    status         = case when status = 'مغلقة' then 'قيد المراجعة' else status end
+  where id = v_id;
+  return 'OK';
+end $$;
+
+-- تعيين رمز التصفير أو تغييره (من SQL Editor فقط؛ يُحفظ مشفّراً، 8 أحرف على الأقل)
+create or replace function public.set_reset_code(p_code text)
+returns void
+language plpgsql security definer set search_path = public, extensions as $$
+begin
+  if length(coalesce(p_code, '')) < 8 then
+    raise exception 'رمز التصفير يجب ألا يقل عن 8 أحرف';
+  end if;
+  insert into public.app_settings (key, value) values ('reset_hash', crypt(p_code, gen_salt('bf')))
+    on conflict (key) do update set value = excluded.value;
+end $$;
+revoke all on function public.set_reset_code(text) from public, anon, authenticated;
+
+-- تصفير المنصة: كلمة مرور الأدمن + رمز التصفير؛ يحذف كل الشكاوى (ومعها الجلسات والسجل)
+-- وكلمات مرور المشتكين الخاصة، ويعيد عدّاد الأرقام إلى 1. لا يمس كلمات مرور الأدمن والإدارة ولا الإعدادات.
+-- تُرجع: 'OK' أو 'NO_CODE' (لم يُعيَّن رمز) أو 'WRONG_CODE'
+create or replace function public.admin_reset_platform(p_secret text, p_reset_code text)
+returns text
+language plpgsql security definer set search_path = public, extensions as $$
+declare
+  v_hash text;
+begin
+  if public.verify_password('أدمن', p_secret) is null then
+    return 'WRONG_CODE';
+  end if;
+  select value into v_hash from public.app_settings where key = 'reset_hash';
+  if v_hash is null then
+    return 'NO_CODE';
+  end if;
+  if crypt(coalesce(p_reset_code, ''), v_hash) <> v_hash then
+    return 'WRONG_CODE';
+  end if;
+  delete from public.complaints where true;
+  delete from public.access_passwords where role = 'مشتكي';
+  perform setval('public.complaint_number_seq', 1, false);
+  return 'OK';
+end $$;
+grant execute on function public.admin_reset_platform(text, text) to anon, authenticated;
+
+-- ---------------------------------------------------------------------
+-- 21) كلمة مرور الأدمن الأولى — غيّر 'غيّرني-123' قبل التنفيذ (6 أحرف على الأقل)
 -- ---------------------------------------------------------------------
 insert into public.access_passwords (role, password, holder_name)
 values ('أدمن', '12345', 'المدير');

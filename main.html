@@ -2,7 +2,7 @@
 <!--
 =======================================================================
   الملف: main.html
-  المشروع: منصة شكاوى لجنة الحج
+  المشروع: منصة الشكاوى — إدارة الحج والعمرة، قسم الشكاوى
   الوصف: تطبيق React (يعمل من المتصفح مباشرة) متصل بـ Supabase.
   يعتمد على: config.js (الاتصال، التصنيفات، قواعد التنبيهات) + supabase/schema.sql
 
@@ -20,7 +20,7 @@
   ملاحظات:
     - الحالات: جديد / قيد المراجعة / جاري المتابعة / مغلقة (تُستخدم أسماء لاتينية للألوان: new/review/follow/closed).
     - الموقع لا يقرأ الجداول مباشرة؛ كل العمليات عبر دوال Supabase تتحقق من المدخلات داخلها.
-    - كلمتا الأدمن والإدارة تُحفظان في sessionStorage؛ شكاوى المشتكي (الرقم + الرمز) في localStorage.
+    - كلمتا الأدمن والإدارة تُحفظان في sessionStorage (وفي localStorage إن اختير «تذكّرني»)؛ شكاوى المشتكي (الرقم + الرمز) في localStorage.
     - قاعدة معتمدة: تصميم ثابت على الجوال (لا تمرير أفقي للصفحة؛ الجداول داخل إطار قابل للتمرير).
 
   سجل التعديلات:
@@ -55,6 +55,10 @@
     2026-09-29  مربع «المطلوب»: زر «إغلاق الشكوى بدلاً من ذلك»، ومربع أخضر «ستُغلق» عند اختيار «مغلقة».
     2026-09-29  تغيير الحالة تلقائياً: فتح شكوى «جديد» ← «قيد المراجعة»؛ حالة الجلسة «جاري المتابعة» أو «مغلقة» فقط؛
                 (والاعتراض على شكوى مغلقة يعيدها إلى «قيد المراجعة» — في قاعدة البيانات).
+    2026-09-30  الهوية: «إدارة الحج والعمرة — قسم الشكاوى» وشعار logo.png (🕋 إن لم يوجد الملف)؛ رقم الشكوى بلا «HJ-»؛
+                أيقونة عين بدل القرد في إظهار كلمة المرور؛ «تذكّرني على هذا الجهاز» لكلمتي الأدمن والتقارير
+                (localStorage) مع اسم حساب مخفي ليعرض المتصفح حفظ كلمة المرور؛ تحويل الكلام إلى نص يعيد التشغيل
+                تلقائياً على الجوال ويعرض النص أثناء الكلام؛ تبويب «⚙️ الإعدادات» لتصفير المنصة برمز تصفير خاص.
 =======================================================================
 -->
 <html lang="ar" dir="rtl">
@@ -62,7 +66,9 @@
 <meta charset="utf-8">
 <!-- عرض مناسب للجوال، مع دعم حواف الشاشات الحديثة -->
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>منصة شكاوى لجنة الحج</title>
+<title>قسم الشكاوى — إدارة الحج والعمرة</title>
+<!-- أيقونة التبويب: الشعار -->
+<link rel="icon" href="logo.png">
 <!-- الخط العربي Tajawal -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet">
@@ -284,6 +290,28 @@
   .detail-grid dt { color: var(--muted); font-size: 13px; }
   .detail-grid dd { margin: 2px 0 0; font-weight: 700; overflow-wrap: anywhere; }
 
+  /* الشعار واسم الجهة في الشريط العلوي وصفحات الدخول */
+  .logo { object-fit: contain; flex: none; }
+  .hero .logo, .hero .brand-mark { display: block; margin: 0 auto 8px; }
+  .hero-org { color: var(--gold); font-weight: 800; font-size: 14px; margin-bottom: 2px; }
+  .brand-text { display: flex; flex-direction: column; line-height: 1.25; min-width: 0; }
+  .brand-text b { font-size: 16px; }
+  .brand-text small { font-weight: 500; opacity: .8; font-size: 12.5px; }
+
+  /* «تذكّرني» وخانة اسم الحساب المخفية بصرياً */
+  .keep-row { display: flex; align-items: center; gap: 8px; margin-top: 12px; font-size: 14px; color: var(--muted); cursor: pointer; }
+  .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); border: 0; }
+
+  /* النص الجاري التقاطه من الميكروفون (قبل تثبيته) */
+  .interim { margin-top: 6px; padding: 6px 10px; border-radius: 8px; background: #fff4e6; color: #a24f06; font-size: 14px; }
+
+  /* قسم التصفير: إطار أحمر تحذيري */
+  .danger-zone { border: 2px solid #f1b5b0; background: #fff8f7; }
+  .danger-zone h2 { color: var(--danger); }
+  .danger-zone ul { margin: 0 0 12px; padding-inline-start: 20px; line-height: 1.9; }
+  .btn.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
+  .btn.danger:disabled { opacity: .5; cursor: not-allowed; }
+
   /* مربع «حدّد موعد التنبيه القادم» عند فتح الشكوى من «المطلوب» */
   .due-prompt { background: #fff4e6; border: 2px solid #f3c99a; border-radius: 12px; padding: 12px; margin-bottom: 14px; }
   .due-prompt.closed { background: #e8f6ed; border-color: #9fd3b1; }
@@ -501,7 +529,7 @@ async function exportAllToExcel(secret, complaints) {
     { name: "سجل الإحالة",
       headers: ["رقم الشكوى", "الوقت", "من", "إلى", "بواسطة", "المصدر"],
       rows: log.filter(x => x.field === "referred_to").map(x => [x.complaint_number, xlDate(x.at), x.old_value, x.new_value, x.actor, x.source]) },
-  ], `شكاوى-لجنة-الحج-${toDateInput(new Date())}.xlsx`);
+  ], `قسم-الشكاوى-${toDateInput(new Date())}.xlsx`);
 }
 
 // متابعة الجزء بعد # في الرابط (لاختيار الصفحة)
@@ -537,12 +565,23 @@ const Alert = ({ type, children }) => <div className={`alert ${type}`}>{children
 const Loading = () => <div className="spinner" aria-label="جارٍ التحميل" />;
 const StatusBadge = ({ value }) => <span className={`badge ${stClass(value)}`}>{value}</span>;
 
-// الشريط العلوي: الشعار، اسم الصفحة، وزر خروج اختياري
+// الشعار: الصورة logo.png في مجلد المنصة؛ إن لم توجد يظهر 🕋 مؤقتاً
+function Logo({ size }) {
+  const [ok, setOk] = useState(true);
+  return ok
+    ? <img className="logo" src="logo.png" alt="الشعار" width={size} height={size} onError={() => setOk(false)} />
+    : <span className="brand-mark" style={{ width: size, height: size, fontSize: size * 0.55 }}>🕋</span>;
+}
+
+// الشريط العلوي: الشعار، اسم الجهة والقسم، اسم الصفحة، وزر خروج اختياري
 function Header({ label, onLogout }) {
   return (
     <header className="topbar">
       <div className="topbar-inner">
-        <a className="brand" href="#"><span className="brand-mark">🕋</span>شكاوى لجنة الحج{label && <small>· {label}</small>}</a>
+        <a className="brand" href="#">
+          <Logo size={36} />
+          <span className="brand-text"><b>إدارة الحج والعمرة</b><small>قسم الشكاوى{label && ` · ${label}`}</small></span>
+        </a>
         {onLogout && <button className="btn ghost" onClick={onLogout}>خروج</button>}
       </div>
     </header>
@@ -560,12 +599,14 @@ function SetupNotice() {
 }
 
 // صفحة دخول موحّدة (كلمة مرور المشتكي، الأدمن، الإدارة): verify(value) تُرجع رسالة خطأ أو null
-function GatePage({ title, sub, label, placeholder, numeric, maxLength, secret, initialError, verify, onPass, footer }) {
-  // المدخل، حالة التحقق، وإظهار كلمة المرور المخفية
+// account: اسم ثابت للحساب (admin / reports) حتى يحفظ المتصفح كلمة المرور لكل صفحة؛ remember: إظهار «تذكّرني»
+function GatePage({ title, sub, label, placeholder, numeric, maxLength, secret, initialError, verify, onPass, footer, account, remember }) {
+  // المدخل، حالة التحقق، إظهار كلمة المرور المخفية، و«تذكّرني على هذا الجهاز»
   const [value, setValue] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(initialError || "");
   const [show, setShow] = useState(false);
+  const [keep, setKeep] = useState(true);
 
   // تنظيف المدخل: الأرقام فقط (مع تحويل ٠-٩) عند طلب ذلك
   function onChange(e) {
@@ -582,19 +623,22 @@ function GatePage({ title, sub, label, placeholder, numeric, maxLength, secret, 
     setBusy(true);
     const err = await verify(value.trim());
     setBusy(false);
-    if (err) setError(err); else onPass(value.trim());
+    if (err) setError(err); else onPass(value.trim(), remember && keep);
   }
 
   // العرض: الشعار، العنوان، الخانة (في المنتصف، ومعها زر إظهار للمخفية)، وزر الدخول
   return (
     <div className="narrow">
       <div className="hero">
-        <div className="brand-mark">🕋</div>
+        <Logo size={72} />
+        <div className="hero-org">إدارة الحج والعمرة — قسم الشكاوى</div>
         <h1>{title}</h1>
         {sub && <p>{sub}</p>}
       </div>
       <form className="card" onSubmit={submit} noValidate>
         {error && <Alert type="error">{error}</Alert>}
+        {/* اسم حساب مخفي بصرياً: يجعل مدير كلمات المرور في المتصفح يعرض الحفظ ويملأ الخانة لاحقاً */}
+        {account && <input type="text" name="username" autoComplete="username" value={account} readOnly tabIndex={-1} className="sr-only" aria-hidden="true" />}
         <Field label={label}>
           <div className="pw-wrap">
             <input className={secret ? "secret-input" : "code-input"} type={secret && !show ? "password" : "text"} value={value} onChange={onChange}
@@ -602,14 +646,31 @@ function GatePage({ title, sub, label, placeholder, numeric, maxLength, secret, 
               autoCapitalize="off" spellCheck={false} placeholder={placeholder} dir="ltr" />
             {secret && (
               <button type="button" className="pw-toggle" onClick={() => setShow(s => !s)}
-                aria-label={show ? "إخفاء كلمة المرور" : "إظهار كلمة المرور"}>{show ? "🙈" : "👁"}</button>
+                aria-label={show ? "إخفاء كلمة المرور" : "إظهار كلمة المرور"}><EyeIcon closed={show} /></button>
             )}
           </div>
         </Field>
+        {remember && (
+          <label className="keep-row">
+            <input type="checkbox" checked={keep} onChange={e => setKeep(e.target.checked)} />
+            تذكّرني على هذا الجهاز (لا تفعّله على جهاز مشترك)
+          </label>
+        )}
         <button className="btn block" style={{ marginTop: 16 }} disabled={busy}>{busy ? "جارٍ التحقق…" : "دخول"}</button>
       </form>
       {footer}
     </div>
+  );
+}
+
+// أيقونة العين: مفتوحة (إظهار كلمة المرور) أو مشطوبة بخط (إخفاؤها)
+function EyeIcon({ closed }) {
+  return (
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z" />
+      <circle cx="12" cy="12" r="3" />
+      {closed && <line x1="3" y1="3" x2="21" y2="21" />}
+    </svg>
   );
 }
 
@@ -654,7 +715,7 @@ function ComplainantPage() {
       onRejected={msg => { setCode(null); setGateError(msg); }} />
   );
   return (
-    <GatePage key={gateError} title="منصة شكاوى لجنة الحج" sub="أدخل كلمة المرور التي وصلتك لتقديم شكواك"
+    <GatePage key={gateError} title="تقديم شكوى" sub="أدخل كلمة المرور التي وصلتك لتقديم شكواك"
       label="كلمة المرور" placeholder={isPrivate ? "••••" : ""} numeric={isPrivate} maxLength={isPrivate ? 4 : 30}
       initialError={gateError} verify={verify} onPass={v => { setGateError(""); setCode(v); }}
       footer={
@@ -676,6 +737,7 @@ function ComplainantPage() {
 function ComplaintForm({ code, onDone, onRejected }) {
   // بيانات النموذج وحالة الإرسال
   const [form, setForm] = useState({ name: "", phone: "", contact: "", accused: "", title: "", subject: "" });
+  const [interim, setInterim] = useState("");   // الكلام الجاري التقاطه قبل تثبيته
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const set = key => e => setForm(f => ({ ...f, [key]: e.target.value }));
@@ -712,7 +774,7 @@ function ComplaintForm({ code, onDone, onRejected }) {
         {error && <Alert type="error">{error}</Alert>}
         <div className="grid" style={{ gridTemplateColumns: "1fr" }}>
           <Field label="اسمك" required><input type="text" value={form.name} onChange={set("name")} maxLength={200} autoComplete="name" /></Field>
-          <Field label="رقم الهاتف للاتصال" required hint="مع رمز الدولة، مثال: 963912345678 — لا حاجة لكتابة 00 في البداية">
+          <Field label="رقم الهاتف للاتصال" required hint="مع رمز الدولة، مثال: 963912345678">
             <input type="tel" inputMode="tel" dir="ltr" value={form.phone} onChange={setPhone("phone")} maxLength={15} autoComplete="tel" />
           </Field>
           <Field label="رقم واتس / تلغرام" hint="اختياري — إن كان مختلفاً عن رقم الهاتف">
@@ -723,9 +785,10 @@ function ComplaintForm({ code, onDone, onRejected }) {
           <div className="field">
             <div className="row" style={{ justifyContent: "space-between" }}>
               <span className="field-label">نص الاعتراض<b className="req">*</b></span>
-              <MicButton onText={t => setForm(f => ({ ...f, subject: (f.subject ? f.subject.replace(/\s*$/, " ") : "") + t }))} onError={setError} />
+              <MicButton onText={t => setForm(f => ({ ...f, subject: (f.subject ? f.subject.replace(/\s*$/, " ") : "") + t }))} onError={setError} onInterim={setInterim} />
             </div>
             <textarea value={form.subject} onChange={set("subject")} maxLength={5000} placeholder="اشرح تفاصيل الشكوى: ماذا حدث، ومتى، وأين… أو اضغط 🎤 وتحدّث" style={{ minHeight: 150 }} />
+            {interim && <div className="interim">🎙️ {interim}</div>}
           </div>
         </div>
         <button className="btn block" style={{ marginTop: 18 }} disabled={busy}>{busy ? "جارٍ الإرسال…" : "إرسال الشكوى"}</button>
@@ -740,39 +803,59 @@ function cleanPhone(v) {
   return String(v || "").replace(/[٠-٩]/g, d => "٠١٢٣٤٥٦٧٨٩".indexOf(d)).replace(/\D/g, "").replace(/^00/, "").slice(0, 15);
 }
 
-// زر 🎤 تحويل الكلام إلى نص (يظهر فقط في المتصفحات التي تدعمه، مثل Chrome على الجوال والحاسوب)
-function MicButton({ onText, onError }) {
+// زر 🎤 تحويل الكلام إلى نص (يظهر فقط في المتصفحات التي تدعمه)؛ يستمر حتى «إيقاف» ويعرض الكلام أثناء النطق
+function MicButton({ onText, onError, onInterim }) {
   // هل المتصفح يدعم التعرّف على الكلام؟ وهل التسجيل جارٍ؟
   const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   const [listening, setListening] = useState(false);
   const recRef = React.useRef(null);
+  const wantRef = React.useRef(false);      // المستخدم ما زال يريد الاستماع (لإعادة التشغيل التلقائي)
+  const failRef = React.useRef(0);          // إعادات تشغيل فاشلة متتالية (حماية من التكرار اللانهائي)
 
   // إيقاف التسجيل عند مغادرة الصفحة
-  useEffect(() => () => { try { recRef.current && recRef.current.stop(); } catch {} }, []);
+  useEffect(() => () => { wantRef.current = false; try { recRef.current && recRef.current.abort(); } catch {} }, []);
   if (!Recognition) return null;
 
-  // بدء التسجيل بالعربية؛ كل جملة مكتملة تُضاف إلى النص
-  function start() {
+  // جلسة استماع واحدة؛ الجوال يُنهيها بعد ثوانٍ من الصمت فنعيد تشغيلها تلقائياً حتى يضغط «إيقاف»
+  // (على أندرويد: continuous = false لتجنّب تكرار الجمل المعروف في Chrome)
+  function run() {
     const rec = new Recognition();
     rec.lang = "ar-SA";
-    rec.continuous = true;
-    rec.interimResults = false;
+    rec.continuous = !/Android/i.test(navigator.userAgent);
+    rec.interimResults = true;
+    rec.maxAlternatives = 1;
     rec.onresult = e => {
-      for (let i = e.resultIndex; i < e.results.length; i++)
-        if (e.results[i].isFinal) onText(e.results[i][0].transcript.trim());
+      failRef.current = 0;
+      let interim = "";
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const r = e.results[i];
+        if (r.isFinal) onText(r[0].transcript.trim()); else interim += r[0].transcript;
+      }
+      onInterim && onInterim(interim);
     };
     rec.onerror = e => {
-      setListening(false);
-      if (e.error === "not-allowed" || e.error === "service-not-allowed") onError("اسمح للمتصفح باستخدام الميكروفون لتحويل الكلام إلى نص.");
-      else if (e.error !== "no-speech" && e.error !== "aborted") onError("تعذّر تحويل الكلام إلى نص، يمكنك الكتابة يدوياً.");
+      if (e.error === "not-allowed" || e.error === "service-not-allowed") {
+        wantRef.current = false; setListening(false);
+        onError("اسمح للمتصفح باستخدام الميكروفون لتحويل الكلام إلى نص.");
+      } else if (e.error === "network") {
+        wantRef.current = false; setListening(false);
+        onError("تحويل الكلام إلى نص يحتاج اتصالاً بالإنترنت. يمكنك الكتابة يدوياً.");
+      } else if (e.error !== "no-speech" && e.error !== "aborted") {
+        failRef.current++;
+      }
     };
-    rec.onend = () => setListening(false);
+    rec.onend = () => {
+      onInterim && onInterim("");
+      if (wantRef.current && failRef.current < 5) setTimeout(() => { if (wantRef.current) run(); }, 200);
+      else { wantRef.current = false; setListening(false); }
+    };
     recRef.current = rec;
-    try { rec.start(); setListening(true); onError(""); } catch { setListening(false); }
+    try { rec.start(); } catch { failRef.current++; }
   }
 
-  // إيقاف التسجيل
-  function stop() { try { recRef.current && recRef.current.stop(); } catch {} setListening(false); }
+  // بدء الاستماع وإيقافه
+  function start() { wantRef.current = true; failRef.current = 0; setListening(true); onError(""); run(); }
+  function stop() { wantRef.current = false; setListening(false); onInterim && onInterim(""); try { recRef.current && recRef.current.stop(); } catch {} }
 
   // العرض: زر تحدّث / إيقاف
   return (
@@ -852,7 +935,7 @@ function ResultPage() {
         <h2>البحث برقم الشكوى</h2>
         {error && <Alert type="error">{error}</Alert>}
         <div className="grid">
-          <Field label="رقم الشكوى" hint="مثال: HJ-2026-00001"><input type="text" dir="ltr" value={number} onChange={e => setNumber(e.target.value)} maxLength={30} /></Field>
+          <Field label="رقم الشكوى" hint="مثال: 2026-00001"><input type="text" dir="ltr" value={number} onChange={e => setNumber(e.target.value)} maxLength={30} /></Field>
           <Field label="رمز المتابعة" hint="6 أرقام"><input type="text" inputMode="numeric" dir="ltr" value={code} onChange={e => setCode(e.target.value)} maxLength={6} /></Field>
         </div>
         <button className="btn block" style={{ marginTop: 14 }} disabled={busy}>{busy ? "جارٍ البحث…" : "عرض النتيجة"}</button>
@@ -907,7 +990,7 @@ function ObjectionPage() {
     setBusy(false);
     if (rpcErr) return setError("تعذّر إرسال الاعتراض، يرجى المحاولة مرة أخرى.");
     if (data === "INVALID") return setError("رقم الشكوى أو رمز الاعتراض لم يعد صالحاً.");
-    if (data === "EXPIRED") setError("انتهت مدة الاعتراض. للحالات الاستثنائية تواصل مع اللجنة.");
+    if (data === "EXPIRED") setError("انتهت مدة الاعتراض. للحالات الاستثنائية تواصل مع قسم الشكاوى.");
     else if (data === "ALREADY") setError("سبق تقديم الاعتراض على هذه الشكوى.");
     else setDone(true);
     await lookup(number.trim(), code.trim());
@@ -924,7 +1007,7 @@ function ObjectionPage() {
         <form className="card" onSubmit={open} noValidate>
           {error && <Alert type="error">{error}</Alert>}
           <div className="grid">
-            <Field label="رقم الشكوى" hint="مثال: HJ-2026-00001"><input type="text" dir="ltr" value={number} onChange={e => setNumber(e.target.value)} maxLength={30} /></Field>
+            <Field label="رقم الشكوى" hint="مثال: 2026-00001"><input type="text" dir="ltr" value={number} onChange={e => setNumber(e.target.value)} maxLength={30} /></Field>
             <Field label="رمز الاعتراض" hint="6 أرقام"><input type="text" inputMode="numeric" dir="ltr" value={code} onChange={e => setCode(e.target.value)} maxLength={6} /></Field>
           </div>
           <button className="btn block" style={{ marginTop: 14 }} disabled={busy}>{busy ? "جارٍ التحقق…" : "عرض الشكوى"}</button>
@@ -945,7 +1028,7 @@ function ObjectionPage() {
               </div>
             )}
           </div>
-          {done && <Alert type="ok">✅ تم تسجيل اعتراضك بنجاح، وستراجعه اللجنة.</Alert>}
+          {done && <Alert type="ok">✅ تم تسجيل اعتراضك بنجاح، وسيراجعه قسم الشكاوى.</Alert>}
           {error && <Alert type="error">{error}</Alert>}
           {view.objection_at ? (
             <div className="card">
@@ -956,7 +1039,7 @@ function ObjectionPage() {
           ) : view.deadline && new Date(view.deadline) < new Date() ? (
             <div className="card center">
               <h2 style={{ color: "var(--danger)" }}>انتهت مدة الاعتراض</h2>
-              <p className="muted" style={{ margin: 0 }}>لا يُقبل الاعتراض بعد الموعد المحدد إلا في الحالات الاستثنائية. تواصل مع اللجنة إن كان لديك عذر.</p>
+              <p className="muted" style={{ margin: 0 }}>لا يُقبل الاعتراض بعد الموعد المحدد إلا في الحالات الاستثنائية. تواصل مع قسم الشكاوى إن كان لديك عذر.</p>
             </div>
           ) : (
             <form className="card" onSubmit={submit} noValidate>
@@ -985,7 +1068,7 @@ function ResultCard({ r }) {
       </div>
       {r.title && <div className="c-title" style={{ marginTop: 0, marginBottom: 8 }}>📝 {r.title}</div>}
       <div className="field-label">النتيجة</div>
-      <div className="subject" style={{ marginBottom: 6 }}>{r.result || "لم تصدر النتيجة بعد، ستتابع اللجنة شكواك."}</div>
+      <div className="subject" style={{ marginBottom: 6 }}>{r.result || "لم تصدر النتيجة بعد، سيتابع قسم الشكاوى شكواك."}</div>
       {r.closed_date && <div className="muted">تاريخ الإغلاق: {fmtDate(r.closed_date)}</div>}
     </div>
   );
@@ -1109,6 +1192,7 @@ function AdminPage({ secret }) {
         <button className={tab === "sessions" ? "active" : ""} onClick={() => setTab("sessions")}>🗓️ الجلسات</button>
         <button className={tab === "access" ? "active" : ""} onClick={() => setTab("access")}>🔐 دخول المشتكين</button>
         <button className={tab === "viewers" ? "active" : ""} onClick={() => setTab("viewers")}>📊 كلمات مرور الإدارة</button>
+        <button className={tab === "settings" ? "active" : ""} onClick={() => setTab("settings")}>⚙️ الإعدادات</button>
       </div>
       {error && <Alert type="error">{error}</Alert>}
       {tab === "today" && <AdminDue secret={secret} rows={rows} onSaved={onSaved} reload={reload} onOpen={c => openComplaint(c, true)} />}
@@ -1116,6 +1200,7 @@ function AdminPage({ secret }) {
       {tab === "sessions" && <AdminSessions secret={secret} version={sessVer} onOpen={c => openComplaint(c)} />}
       {tab === "access" && <AdminAccess secret={secret} />}
       {tab === "viewers" && <AdminViewers secret={secret} />}
+      {tab === "settings" && <AdminSettings secret={secret} rows={rows} reload={reload} />}
       {opened && (
         <div className="modal-back" onClick={() => setOpenId(null)}>
           <div className="modal" onClick={e => e.stopPropagation()}>
@@ -1385,6 +1470,71 @@ function AdminDue({ secret, rows, onSaved, reload, onOpen }) {
       {rows === null ? <Loading /> : due.length === 0 ? (
         <div className="card empty">✅ لا توجد أمور مطلوبة {mode === "all" ? "حالياً" : mode === "date" ? "في هذا اليوم" : "اليوم"} — كل الشكاوى في وضع جيد.</div>
       ) : <ComplaintsTable secret={secret} rows={due.map(x => x.c)} onSaved={onSaved} onOpen={onOpen} alertsFor={alertsFor} />}
+    </div>
+  );
+}
+
+// تبويب الإعدادات: تصفير المنصة (حذف كل الشكاوى والجلسات والسجل وكلمات مرور المشتكين، وإعادة الترقيم)
+// محمي بثلاثة أقفال: كلمة مرور الأدمن + رمز التصفير الخاص (يُعيَّن من SQL Editor) + كتابة كلمة «تصفير»
+function AdminSettings({ secret, rows, reload }) {
+  // رمز التصفير وإظهاره، كلمة التأكيد، وحالة التنفيذ والرسائل
+  const [code, setCode] = useState("");
+  const [show, setShow] = useState(false);
+  const [confirm, setConfirm] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+
+  // نسخة احتياطية قبل التصفير: نفس التصدير الكامل إلى Excel
+  async function backup() {
+    setBusy(true); setMsg(null);
+    try { await exportAllToExcel(secret, rows || []); }
+    catch (e) { setMsg({ type: "error", text: e.message || NET_ERR }); }
+    setBusy(false);
+  }
+
+  // التنفيذ: سؤال أخير، ثم الدالة admin_reset_platform
+  async function reset() {
+    if (!window.confirm("سيتم حذف جميع الشكاوى نهائياً ولا يمكن التراجع. متابعة؟")) return;
+    setBusy(true); setMsg(null);
+    const { data, error } = await sb.rpc("admin_reset_platform", { p_secret: secret, p_reset_code: code });
+    setBusy(false);
+    if (error) return setMsg({ type: "error", text: NET_ERR });
+    if (data === "NO_CODE") return setMsg({ type: "error", text: "لم يُعيَّن رمز التصفير بعد. عيّنه من Supabase ← SQL Editor بالأمر: select public.set_reset_code('رمزك');" });
+    if (data !== "OK") return setMsg({ type: "error", text: "رمز التصفير غير صحيح." });
+    setCode(""); setConfirm("");
+    setMsg({ type: "ok", text: "✅ تم تصفير المنصة. الشكوى القادمة تبدأ بالرقم " + new Date().getFullYear() + "-00001." });
+    reload();
+  }
+
+  // العرض: بطاقة حمراء تحذيرية بما سيُحذف وما يبقى، ثم زر النسخة الاحتياطية والخانات
+  return (
+    <div className="card danger-zone">
+      <h2>⚠️ تصفير المنصة</h2>
+      <ul>
+        <li>يُحذف: جميع الشكاوى، وجلساتها، وسجلها، وكلمات مرور المشتكين الخاصة.</li>
+        <li>يبقى: كلمات مرور الأدمن والإدارة، وإعدادات الدخول.</li>
+        <li>يعود ترقيم الشكاوى إلى 00001.</li>
+      </ul>
+      <p className="muted">ننصح بتصدير نسخة احتياطية أولاً ({(rows || []).length} شكوى حالياً).</p>
+      <button type="button" className="btn secondary" disabled={busy} onClick={backup}>📥 نسخة احتياطية (Excel)</button>
+      <div className="grid" style={{ marginTop: 14 }}>
+        <Field label="رمز التصفير الخاص" hint="يُعيَّن من Supabase ← SQL Editor، وليس كلمة مرور الأدمن">
+          <div className="pw-wrap">
+            <input className="secret-input" type={show ? "text" : "password"} value={code} onChange={e => setCode(e.target.value)}
+              autoComplete="off" autoCapitalize="off" spellCheck={false} dir="ltr" />
+            <button type="button" className="pw-toggle" onClick={() => setShow(v => !v)}
+              aria-label={show ? "إخفاء الرمز" : "إظهار الرمز"}><EyeIcon closed={show} /></button>
+          </div>
+        </Field>
+        <Field label="للتأكيد اكتب كلمة: تصفير">
+          <input value={confirm} onChange={e => setConfirm(e.target.value)} autoComplete="off" />
+        </Field>
+      </div>
+      {msg && <Alert type={msg.type}>{msg.text}</Alert>}
+      <button type="button" className="btn danger" style={{ marginTop: 12 }}
+        disabled={busy || !code || confirm.trim() !== "تصفير"} onClick={reset}>
+        {busy ? "جارٍ التنفيذ…" : "🗑️ تصفير المنصة نهائياً"}
+      </button>
     </div>
   );
 }
@@ -2024,7 +2174,7 @@ function AdminAccess({ secret }) {
             </Field>
             {saved.general_password && (
               <button type="button" className="btn secondary sm" style={{ marginTop: 10 }}
-                onClick={async () => setMsg(await copyText(`لتقديم شكوى إلى لجنة الحج افتح الرابط:\n${siteUrl()}\nكلمة المرور: ${saved.general_password}`) ? { type: "ok", text: "تم نسخ الرابط وكلمة المرور." } : { type: "error", text: "تعذّر النسخ." })}>
+                onClick={async () => setMsg(await copyText(`لتقديم شكوى إلى إدارة الحج والعمرة (قسم الشكاوى) افتح الرابط:\n${siteUrl()}\nكلمة المرور: ${saved.general_password}`) ? { type: "ok", text: "تم نسخ الرابط وكلمة المرور." } : { type: "error", text: "تعذّر النسخ." })}>
                 📋 نسخ الرابط مع كلمة المرور المحفوظة
               </button>
             )}
@@ -2074,7 +2224,7 @@ function AdminCodes({ secret }) {
   }
 
   // نص الرسالة للمشتكي
-  const text = c => `لتقديم شكواك إلى لجنة الحج افتح الرابط:\n${siteUrl()}\nكلمة المرور الخاصة بك: ${c}`;
+  const text = c => `لتقديم شكواك إلى إدارة الحج والعمرة (قسم الشكاوى) افتح الرابط:\n${siteUrl()}\nكلمة المرور الخاصة بك: ${c}`;
 
   // العرض: نموذج التوليد، الكلمة الجديدة وزر النسخ، ثم القائمة
   return (
@@ -2155,7 +2305,7 @@ function AdminViewers({ secret }) {
   }
 
   // نص الرسالة لصاحب كلمة المرور
-  const text = r => `رابط تقارير شكاوى لجنة الحج:\n${siteUrl()}#/reports\nكلمة المرور الخاصة بك: ${r.code}`;
+  const text = r => `رابط تقارير قسم الشكاوى — إدارة الحج والعمرة:\n${siteUrl()}#/reports\nكلمة المرور الخاصة بك: ${r.code}`;
 
   // العرض: مفتاح بطاقة التقارير، نموذج الإضافة، الكلمة الجديدة وزر النسخ، ثم القائمة
   return (
@@ -2443,12 +2593,18 @@ function ReportCard({ code, number, onClose }) {
 function App() {
   // الرابط الحالي، وكلمتا الأدمن والإدارة المحفوظتان للنافذة الحالية
   const hash = useHash();
-  const [adminSecret, setAdminSecret] = useState(() => storeGet(sessionStorage, "hajj_admin"));
-  const [viewer, setViewer] = useState(() => { try { return JSON.parse(storeGet(sessionStorage, "hajj_viewer")); } catch { return null; } });
+  const readSaved = key => storeGet(sessionStorage, key) || storeGet(localStorage, key);
+  const [adminSecret, setAdminSecret] = useState(() => readSaved("hajj_admin"));
+  const [viewer, setViewer] = useState(() => { try { return JSON.parse(readSaved("hajj_viewer")); } catch { return null; } });
 
   // حفظ كلمات المرور أو حذفها عند الخروج
-  const setAdmin = s => { storeSet(sessionStorage, "hajj_admin", s); setAdminSecret(s); };
-  const setView = v => { storeSet(sessionStorage, "hajj_viewer", v ? JSON.stringify(v) : null); setViewer(v); };
+  // الحفظ: «تذكّرني» ← على الجهاز (يبقى بعد إغلاق المتصفح)، وإلا للنافذة الحالية فقط؛ الخروج يمسح الاثنين
+  const keepValue = (key, value, remember) => {
+    storeSet(sessionStorage, key, value); storeSet(localStorage, key, null);
+    if (value != null && remember) storeSet(localStorage, key, value);
+  };
+  const setAdmin = (s, remember) => { keepValue("hajj_admin", s, remember); setAdminSecret(s); };
+  const setView = (v, remember) => { keepValue("hajj_viewer", v ? JSON.stringify(v) : null, remember); setViewer(v); };
 
   // التحقق من كلمة مرور الأدمن عبر admin_login
   async function verifyAdmin(value) {
@@ -2473,13 +2629,13 @@ function App() {
   else if (hash === "#/admin") {
     label = "الأدمن";
     if (adminSecret) { page = <AdminPage secret={adminSecret} />; logout = () => setAdmin(null); }
-    else page = <GatePage title="صفحة الأدمن" label="كلمة مرور الأدمن" secret verify={verifyAdmin} onPass={setAdmin}
+    else page = <GatePage title="صفحة الأدمن" label="كلمة مرور الأدمن" secret account="admin" remember verify={verifyAdmin} onPass={setAdmin}
                   footer={cfg.ACTIVATE_URL && <div className="below-link"><a href={cfg.ACTIVATE_URL} target="_blank" rel="noopener">⚡ المنصة لا تعمل؟ تنشيط قاعدة البيانات</a></div>} />;
   } else if (hash === "#/reports") {
     label = "التقارير";
     if (viewer) { page = <ReportsPage code={viewer.code} viewerName={viewer.name} />; logout = () => setView(null); }
     else page = <GatePage title="تقارير الشكاوى" sub="أدخل كلمة مرور الإدارة الخاصة بك" label="كلمة مرور الإدارة" secret
-                  verify={verifyViewer} onPass={code => setView({ code, name: viewerName })} />;
+                  account="reports" remember verify={verifyViewer} onPass={(code, remember) => setView({ code, name: viewerName }, remember)} />;
   } else if (hash === "#/result") { label = "نتيجة الشكوى"; page = <ResultPage />; }
   else if (hash === "#/objection") { label = "الاعتراض"; page = <ObjectionPage />; }
   else page = <ComplainantPage />;
