@@ -76,6 +76,7 @@
     2026-09-30  السرعة: نقل كود التطبيق إلى src/app.jsx وتحويله مسبقاً إلى app.js (build.py)، وحذف مكتبة
                 Babel من الصفحة — لم يعد الجوال يحوّل الكود عند كل فتح. التعديلات القادمة تُسجَّل في src/app.jsx.
     2026-09-30  تنسيقات الشاشة الرئيسية للأدمن (.tile / .home-tiles / .section-bar).
+    2026-09-30  تنسيقات خطوات نموذج الشكوى (.steps / .step-buttons).
 =======================================================================
 -->
 <html lang="ar" dir="rtl">
@@ -349,6 +350,18 @@
   .list-items { list-style: none; margin: 12px 0 0; padding: 0; }
   .list-items li { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 9px; margin-bottom: 6px; background: #fafbf9; }
 
+  /* خطوات نموذج الشكوى: دوائر مرقّمة (الحالية خضراء، المكتملة ✓) وخط يصل بينها */
+  .steps { display: flex; list-style: none; margin: 0 0 14px; padding: 0; }
+  .steps li { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; position: relative; color: var(--muted); font-size: 13.5px; font-weight: 700; }
+  .steps li + li::before { content: ""; position: absolute; top: 16px; inset-inline-end: 50%; width: 100%; height: 3px; background: #dfe5df; z-index: 0; }
+  .steps li.s-done + li::before, .steps li.s-now::before { background: var(--brand); }
+  .step-dot { position: relative; z-index: 1; width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; background: #e9ece7; color: var(--muted); font-size: 16px; }
+  .steps li.s-now { color: var(--ink); }
+  .steps li.s-now .step-dot { background: var(--brand); color: #fff; box-shadow: 0 0 0 4px #d9ebe1; }
+  .steps li.s-done .step-dot { background: #d9f0e1; color: #1d6b3c; }
+  .step-buttons { display: flex; gap: 10px; margin-top: 18px; }
+  .step-buttons .btn { flex: 1; min-height: 50px; font-size: 17px; }
+
   /* الشاشة الرئيسية للأدمن: ترحيب، بحث، وأزرار كبيرة بأعداد */
   .home-hello { font-size: 18px; font-weight: 800; margin: 4px 0 12px; }
   .home-search { margin-bottom: 14px; }
@@ -491,6 +504,6 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4"></script>
 
 <!-- كود التطبيق جاهزاً (مولَّد من src/app.jsx بالأمر python build.py) -->
-<script src="app.js?v=08b1ca117d"></script>
+<script src="app.js?v=11f285e7fa"></script>
 </body>
 </html>

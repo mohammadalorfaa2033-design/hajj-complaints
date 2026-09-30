@@ -13,6 +13,7 @@
 //    2026-09-30  نقل الكود من main.html إلى هذا الملف، مع التحويل المسبق إلى app.js (build.py).
 //    2026-09-30  صفحة الأدمن: شاشة رئيسية بأزرار كبيرة وأعداد وبحث سريع، وكل قسم يُفتح وحده مع زر «🏠 الرئيسية»
 //                (وزر الرجوع في الجوال)؛ صلاحيتان «مدير» و«موظف» (admin_whoami)، وقسم «👥 الموظفون» للمدير.
+//    2026-09-30  نموذج الشكوى على ثلاث خطوات مع شريط تقدم: بياناتك ← المشتكى عليه ← شكواك.
 // =======================================================================
 // استيراد خطافات React المستخدمة في المكونات
 const { useState, useEffect, useCallback } = React;
@@ -329,11 +330,15 @@ function ComplainantPage() {
   );
 }
 
-// نموذج الشكوى: الاسم وصفته، الهاتف، واتس/تلغرام، المشتكى عليه وصفته، عنوان الاعتراض، نص الاعتراض (مع زر التحدث)
-// (رقم الشكوى ورمز المتابعة والتاريخ تلقائية)
+// نموذج الشكوى على ثلاث خطوات مع شريط تقدم (أسهل لغير المعتادين على النماذج الطويلة):
+//   1) بياناتك: الاسم والصفة والهاتف وواتس/تلغرام   2) المشتكى عليه: الاسم والصفة
+//   3) شكواك: عنوان الاعتراض ونصّه (مع زر التحدث)   — رقم الشكوى ورمز المتابعة والتاريخ تلقائية
+const FORM_STEPS = ["بياناتك", "المشتكى عليه", "شكواك"];
+
 function ComplaintForm({ code, onDone, onRejected }) {
-  // بيانات النموذج وحالة الإرسال
+  // بيانات النموذج، الخطوة الحالية (0..2)، وحالة الإرسال
   const [form, setForm] = useState({ name: "", crole: "", phone: "", contact: "", accused: "", arole: "", title: "", subject: "" });
+  const [step, setStep] = useState(0);
   // قائمة الصفات من الإعدادات (وإلا قائمة config.js)
   const [roles, setRoles] = useState([...ROLES]);
   useEffect(() => { sb.rpc("get_form_lists").then(({ data }) => { if (data && data.roles && data.roles.length) setRoles(data.roles); }); }, []);
@@ -343,14 +348,36 @@ function ComplaintForm({ code, onDone, onRejected }) {
   const set = key => e => setForm(f => ({ ...f, [key]: e.target.value }));
   const setPhone = key => e => setForm(f => ({ ...f, [key]: cleanPhone(e.target.value) }));
 
+  // التحقق من خطوة: تُرجع رسالة الخطأ أو "" إن كانت مكتملة
+  function checkStep(i) {
+    if (i === 0) {
+      if (!form.name.trim()) return "اكتب اسمك.";
+      if (!form.crole.trim()) return "اختر صفتك.";
+      if (!form.phone) return "اكتب رقم هاتفك.";
+      if (!/^\d{7,15}$/.test(form.phone)) return "رقم الهاتف غير صالح. اكتب الأرقام فقط مع رمز الدولة.";
+      if (form.contact && !/^\d{7,15}$/.test(form.contact)) return "رقم واتس / تلغرام غير صالح. اكتب الأرقام فقط مع رمز الدولة.";
+    }
+    if (i === 1) {
+      if (!form.accused.trim()) return "اكتب اسم المشتكى عليه.";
+      if (!form.arole.trim()) return "اختر صفة المشتكى عليه.";
+    }
+    if (i === 2) {
+      if (!form.title.trim()) return "اكتب عنواناً قصيراً للاعتراض.";
+      if (!form.subject.trim()) return "اكتب نص الاعتراض أو اضغط 🎤 وتحدّث.";
+    }
+    return "";
+  }
+
+  // الانتقال بين الخطوات (التالي يتحقق أولاً)، مع الصعود لأعلى الصفحة
+  const toStep = i => { setError(""); setStep(i); window.scrollTo({ top: 0, behavior: "smooth" }); };
+  function next() { const err = checkStep(step); if (err) return setError(err); toStep(step + 1); }
+
   // الإرسال عبر submit_complaint؛ تُرجع رقم الشكوى ورمز المتابعة
   async function submit(e) {
     e.preventDefault();
+    if (step < FORM_STEPS.length - 1) return next();   // زر Enter في الخطوات الأولى = التالي
     setError("");
-    if (!form.name.trim() || !form.crole.trim() || !form.phone || !form.accused.trim() || !form.arole.trim() || !form.title.trim() || !form.subject.trim())
-      return setError("يرجى تعبئة جميع الحقول المطلوبة.");
-    if (!/^\d{7,15}$/.test(form.phone)) return setError("رقم الهاتف غير صالح. اكتب الأرقام فقط مع رمز الدولة.");
-    if (form.contact && !/^\d{7,15}$/.test(form.contact)) return setError("رقم واتس / تلغرام غير صالح. اكتب الأرقام فقط مع رمز الدولة.");
+    for (let i = 0; i < FORM_STEPS.length; i++) { const err = checkStep(i); if (err) { setStep(i); return setError(err); } }
     setBusy(true);
     let { data, error: rpcErr } = await sb.rpc("submit_complaint", {
       p_code: code, p_complainant_name: form.name, p_complainant_role: form.crole, p_phone_number: form.phone, p_contact_number: form.contact,
@@ -369,37 +396,61 @@ function ComplaintForm({ code, onDone, onRejected }) {
     onDone(data[0]);
   }
 
-  // العرض: الحقول، وزر التحدث بجانب نص الاعتراض، وزر الإرسال، ورابط معرفة النتيجة
+  // العرض: شريط الخطوات، حقول الخطوة الحالية، ثم زرّا السابق/التالي (أو الإرسال في الأخيرة)
   return (
     <div className="narrow">
       <div className="page-head">
         <h1>تقديم شكوى</h1>
         <p>نستقبل شكواكم ونتابعها بكل اهتمام وسرية</p>
       </div>
+      <ol className="steps">
+        {FORM_STEPS.map((t, i) => (
+          <li key={t} className={i === step ? "s-now" : i < step ? "s-done" : ""}>
+            <span className="step-dot">{i < step ? "✓" : i + 1}</span><span className="step-name">{t}</span>
+          </li>
+        ))}
+      </ol>
       <form className="card" onSubmit={submit} noValidate>
         {error && <Alert type="error">{error}</Alert>}
         <div className="grid" style={{ gridTemplateColumns: "1fr" }}>
-          <Field label="اسمك" required><input type="text" value={form.name} onChange={set("name")} maxLength={200} autoComplete="name" /></Field>
-          <RoleField label="صفتك" roles={roles} value={form.crole} onChange={v => setForm(f => ({ ...f, crole: v }))} />
-          <Field label="رقم الهاتف للاتصال" required hint="مع رمز الدولة، مثال: 963912345678">
-            <input type="tel" inputMode="tel" dir="ltr" value={form.phone} onChange={setPhone("phone")} maxLength={15} autoComplete="tel" />
-          </Field>
-          <Field label="رقم واتس / تلغرام" hint="اختياري — إن كان مختلفاً عن رقم الهاتف">
-            <input type="tel" inputMode="tel" dir="ltr" value={form.contact} onChange={setPhone("contact")} maxLength={15} />
-          </Field>
-          <Field label="اسم المشتكى عليه" required><input type="text" value={form.accused} onChange={set("accused")} maxLength={200} /></Field>
-          <RoleField label="صفة المشتكى عليه" roles={roles} value={form.arole} onChange={v => setForm(f => ({ ...f, arole: v }))} />
-          <Field label="عنوان الاعتراض" required hint="عنوان قصير، مثال: تأخر الحافلة"><input type="text" value={form.title} onChange={set("title")} maxLength={150} /></Field>
-          <div className="field">
-            <div className="row" style={{ justifyContent: "space-between" }}>
-              <span className="field-label">نص الاعتراض<b className="req">*</b></span>
-              <MicButton onText={t => setForm(f => ({ ...f, subject: (f.subject ? f.subject.replace(/\s*$/, " ") : "") + t }))} onError={setError} onInterim={setInterim} />
-            </div>
-            <textarea value={form.subject} onChange={set("subject")} maxLength={5000} placeholder="اشرح تفاصيل الشكوى: ماذا حدث، ومتى، وأين… أو اضغط 🎤 وتحدّث" style={{ minHeight: 150 }} />
-            {interim && <div className="interim">🎙️ {interim}</div>}
-          </div>
+          {step === 0 && (
+            <>
+              <Field label="اسمك" required><input type="text" value={form.name} onChange={set("name")} maxLength={200} autoComplete="name" /></Field>
+              <RoleField label="صفتك" roles={roles} value={form.crole} onChange={v => setForm(f => ({ ...f, crole: v }))} />
+              <Field label="رقم الهاتف للاتصال" required hint="مع رمز الدولة، مثال: 963912345678">
+                <input type="tel" inputMode="tel" dir="ltr" value={form.phone} onChange={setPhone("phone")} maxLength={15} autoComplete="tel" />
+              </Field>
+              <Field label="رقم واتس / تلغرام" hint="اختياري — إن كان مختلفاً عن رقم الهاتف">
+                <input type="tel" inputMode="tel" dir="ltr" value={form.contact} onChange={setPhone("contact")} maxLength={15} />
+              </Field>
+            </>
+          )}
+          {step === 1 && (
+            <>
+              <Field label="اسم المشتكى عليه" required><input type="text" value={form.accused} onChange={set("accused")} maxLength={200} /></Field>
+              <RoleField label="صفة المشتكى عليه" roles={roles} value={form.arole} onChange={v => setForm(f => ({ ...f, arole: v }))} />
+            </>
+          )}
+          {step === 2 && (
+            <>
+              <Field label="عنوان الاعتراض" required hint="عنوان قصير، مثال: تأخر الحافلة"><input type="text" value={form.title} onChange={set("title")} maxLength={150} /></Field>
+              <div className="field">
+                <div className="row" style={{ justifyContent: "space-between" }}>
+                  <span className="field-label">نص الاعتراض<b className="req">*</b></span>
+                  <MicButton onText={t => setForm(f => ({ ...f, subject: (f.subject ? f.subject.replace(/\s*$/, " ") : "") + t }))} onError={setError} onInterim={setInterim} />
+                </div>
+                <textarea value={form.subject} onChange={set("subject")} maxLength={5000} placeholder="اشرح تفاصيل الشكوى: ماذا حدث، ومتى، وأين… أو اضغط 🎤 وتحدّث" style={{ minHeight: 150 }} />
+                {interim && <div className="interim">🎙️ {interim}</div>}
+              </div>
+            </>
+          )}
         </div>
-        <button className="btn block" style={{ marginTop: 18 }} disabled={busy}>{busy ? "جارٍ الإرسال…" : "إرسال الشكوى"}</button>
+        <div className="step-buttons">
+          {step > 0 && <button type="button" className="btn secondary" onClick={() => toStep(step - 1)} disabled={busy}>→ السابق</button>}
+          {step < FORM_STEPS.length - 1
+            ? <button className="btn">التالي ←</button>
+            : <button className="btn" disabled={busy}>{busy ? "جارٍ الإرسال…" : "✅ إرسال الشكوى"}</button>}
+        </div>
       </form>
       <ResultLink />
     </div>
