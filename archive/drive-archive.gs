@@ -27,6 +27,8 @@
 //  سجل التعديلات:
 //    2026-09-30  الإصدار الأول.
 //    2026-09-30  قرار الإغلاق والملف الكامل يشملان حالة «مغلقة بعد الاعتراض».
+//    2026-09-30  الملف الكامل بالترتيب المعتمد: المشتكي، المشتكى عليه، العنوان، النص، الجلسات قبل الاعتراض (موضوع
+//                ونتيجة كل جلسة)، نتيجة الشكوى عند إغلاقها، الاعتراض، الجلسات بعده، ثم نتيجة الاعتراض.
 // =======================================================================
 
 // الإعدادات: عنوان المشروع ومفتاحه العام (نفس config.js)، ومفتاح الأرشفة الخاص، واسم مجلد الأرشيف
@@ -256,6 +258,7 @@ function page(logo, title, body) {
     'h1{color:#00594f;font-size:17pt;margin:0 0 14px}h2{color:#006e5c;font-size:14pt;border-bottom:1px solid #e3ddd2;padding-bottom:4px;margin:22px 0 10px}' +
     'table{width:100%;border-collapse:collapse;margin:6px 0}td,th{border:1px solid #e3ddd2;padding:6px 9px;vertical-align:top;text-align:right}' +
     'th{background:#f5f1ea;color:#00594f;width:28%;font-weight:bold}.box{background:#f5f1ea;border-right:4px solid #279e91;padding:10px 12px;white-space:pre-wrap}' +
+    '.sess{border:1px solid #e3ddd2;border-radius:8px;padding:4px 12px 8px;margin:10px 0}.sess h3{color:#006e5c;font-size:13pt;margin:8px 0}' +
     '.muted{color:#939598}.sign{width:100%;margin-top:48px;border:0}.sign td{border:0;border-top:1px solid #939598;width:40%;text-align:center;padding-top:6px}.sign .gap{border-top:0;width:20%}' +
     '.foot{margin-top:30px;color:#939598;font-size:10pt;border-top:1px solid #e3ddd2;padding-top:6px}' +
     '</style></head><body>' +
@@ -309,28 +312,46 @@ function closingBlock(c) {
     '<table class="sign"><tr><td>رئيس قسم الشكاوى</td><td class="gap"></td><td>الختم</td></tr></table>';
 }
 
-// الملف الكامل: الشكوى ← الإحالات ← الجلسات ← النتيجة ← الاعتراض ← الجلسات بعده ← النتيجة النهائية
+// الملف الكامل بالترتيب المعتمد من الإدارة:
+//   المشتكي ← المشتكى عليه ← عنوان الاعتراض ← نص الاعتراض ← الجلسات قبل الاعتراض (موضوع ونتيجة كل جلسة)
+//   ← نتيجة الشكوى عند إغلاقها ← الاعتراض (إن وُجد) ← الجلسات بعد الاعتراض ← نتيجة الاعتراض
 function fullBlock(c, sess, refs) {
   const objAt = c.objection_at ? new Date(c.objection_at).getTime() : null;
   const before = sess.filter(s => objAt === null || new Date(s.session_at).getTime() < objAt);
   const after = objAt === null ? [] : sess.filter(s => new Date(s.session_at).getTime() >= objAt);
-  const sessionsHtml = list => list.length ? list.map((s, i) => "<h2>جلسة " + (sess.indexOf(s) + 1) + " — " + esc(fmt(s.session_at)) + "</h2>" +
-    kv([["عنوان الجلسة", s.title], ["مُحالة إلى", s.referred_to], ["الحالة بعدها", s.status]]) +
-    (s.topic ? "<p><b>الموضوع:</b></p>" + box(s.topic) : "") + (s.result ? "<p><b>النتيجة:</b></p>" + box(s.result) : "")).join("")
+  const closedBefore = objAt !== null || isClosed(c.status);             // أُغلقت الشكوى (قبل الاعتراض)؟
+  const closedFinal = c.status === "مغلقة بعد الاعتراض";
+
+  // جلسات مفصّلة: عنوان كل جلسة وتاريخها، ثم موضوعها ونتيجتها
+  const sessionsHtml = list => list.length ? list.map(s =>
+    '<div class="sess"><h3>الجلسة ' + (sess.indexOf(s) + 1) + (s.title ? " — " + esc(s.title) : "") +
+    ' <span class="muted">(' + esc(fmt(s.session_at)) + ")</span></h3>" +
+    "<p><b>موضوع الجلسة:</b></p>" + box(s.topic) + "<p><b>نتيجة الجلسة:</b></p>" + box(s.result) + "</div>").join("")
     : '<p class="muted">لا توجد جلسات.</p>';
 
-  let html = "<h2>أولاً: الشكوى</h2>" + complaintBlock(c);
-  if (refs.length) html += "<h2>الإحالات</h2>" + referralsBlock(refs);
-  html += "<h2>ثانياً: الجلسات</h2>" + sessionsHtml(before);
+  // البيانات الأساسية
+  let html = kv([
+    ["رقم الشكوى", c.complaint_number], ["تاريخ الشكوى", fmt(c.received_date)], ["الحالة", c.status],
+    ["اسم المشتكي", (c.complainant_name || "") + (c.complainant_role ? " (" + c.complainant_role + ")" : "")],
+    ["اسم المشتكى عليه", (c.accused_name || "") + (c.accused_role ? " (" + c.accused_role + ")" : "")],
+    ["عنوان الاعتراض", c.title],
+  ]);
+  html += "<h2>نص الاعتراض</h2>" + box(c.subject);
+
+  // المرحلة الأولى: الجلسات ثم نتيجة الشكوى عند إغلاقها
+  html += "<h2>الجلسات" + (objAt !== null ? " قبل الاعتراض" : "") + "</h2>" + sessionsHtml(before);
+  html += "<h2>نتيجة الشكوى عند إغلاقها</h2>" + (closedBefore
+    ? kv([["تاريخ الإغلاق", objAt !== null ? "" : fmtDay(c.closed_date)]]) + box(objAt !== null ? c.result_before_objection : c.result)
+    : '<p class="muted">لم تُغلق الشكوى بعد.</p>');
+
+  // المرحلة الثانية (إن حصل اعتراض): الاعتراض، الجلسات بعده، ونتيجة الاعتراض
   if (objAt !== null) {
-    html += "<h2>ثالثاً: النتيجة</h2>" + box(c.result_before_objection);
-    html += "<h2>رابعاً: الاعتراض</h2>" + kv([["تاريخ الاعتراض", fmt(c.objection_at)], ["سبب التمديد الاستثنائي", c.objection_extension_reason]]) + box(c.objection_text);
-    html += "<h2>خامساً: الجلسات بعد الاعتراض</h2>" + sessionsHtml(after);
-    html += "<h2>سادساً: النتيجة النهائية</h2>" + box(c.result);
-  } else {
-    html += "<h2>ثالثاً: النتيجة</h2>" + box(c.result);
+    html += "<h2>⚖️ الاعتراض</h2>" + kv([["تاريخ الاعتراض", fmt(c.objection_at)], ["سبب التمديد الاستثنائي", c.objection_extension_reason]]) + box(c.objection_text);
+    html += "<h2>الجلسات بعد الاعتراض</h2>" + sessionsHtml(after);
+    html += "<h2>نتيجة الاعتراض</h2>" + (closedFinal
+      ? kv([["تاريخ الإغلاق النهائي", fmtDay(c.closed_date)]]) + box(c.result)
+      : '<p class="muted">الاعتراض قيد المتابعة.</p>');
   }
-  if (isClosed(c.status)) html += "<h2>الإغلاق</h2>" + kv([["تاريخ الإغلاق", fmtDay(c.closed_date)]]);
   return html;
 }
 
