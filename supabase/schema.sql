@@ -62,6 +62,7 @@
 --    2026-09-30  القسم 25: الأرشفة على Drive — جدول الإحالات، «النتيجة قبل الاعتراض»، مفتاح الأرشفة و archive_export.
 --    2026-09-30  القسم 26: تسلسل الشكوى — حالتا «قيد مراجعة الاعتراض» و«جاري متابعة الاعتراض»، الحالة والنتيجة من
 --                آخر جلسة فقط، رمز الاعتراض بعد الإغلاق فقط، المعترض يرى العنوان فقط، ومنع الجلسات على المغلقة.
+--    2026-09-30  القسم 27: القرارات الإدارية (جدول decisions ودوال العرض والحفظ والحذف) وقائمة «تصنيفات القرارات».
 -- =====================================================================
 
 -- ---------------------------------------------------------------------
@@ -175,6 +176,10 @@ drop function if exists public.admin_complaint_referrals(text, uuid);
 drop function if exists public.admin_list_referrals(text);
 drop function if exists public.set_archive_key(text);
 drop function if exists public.archive_export(text);
+drop table if exists public.decisions cascade;
+drop function if exists public.admin_list_decisions(text);
+drop function if exists public.admin_save_decision(text, uuid, text, date, text, text, text, text);
+drop function if exists public.admin_delete_decision(text, uuid);
 drop function if exists public.submit_complaint(text, text, text, text, text, text, text, text, text);
 drop function if exists public.admin_add_session(text, uuid, timestamptz, text, text, text, text, text);
 drop function if exists public.admin_update_session(text, uuid, timestamptz, text, text, text, text, text);
@@ -2739,7 +2744,132 @@ begin
 end $$;
 
 -- ---------------------------------------------------------------------
--- 27) كلمة مرور الأدمن الأولى — غيّر 'غيّرني-123' قبل التنفيذ (6 أحرف على الأقل)
+-- 27) القرارات الإدارية: رقم القرار، تاريخه، عنوانه، موضوعه، رابطه، وتصنيفه
+--     - المدير والموظف يطّلعان ويبحثان؛ المدير وحده يضيف ويعدّل ويحذف
+--     - «تصنيفات القرارات» قائمة يعدّلها المدير من «الإعدادات» (app_settings: decision_classes)
+--     يُنفَّذ وحده أيضاً كتحديث لقاعدة موجودة (لا يحذف بيانات)
+-- ---------------------------------------------------------------------
+-- جدول القرارات
+create table if not exists public.decisions (
+  id               uuid primary key default gen_random_uuid(),
+  decision_number  text not null,                        -- رقم القرار الإداري
+  decision_date    date,                                 -- تاريخ القرار
+  title            text not null,                        -- عنوان القرار
+  subject          text,                                 -- موضوع القرار
+  url              text,                                 -- رابط القرار (Drive أو غيره)
+  classification   text,                                 -- تصنيف القرار
+  created_at       timestamptz not null default now(),
+  updated_at       timestamptz not null default now()
+);
+create index if not exists decisions_date_idx on public.decisions (decision_date desc);
+alter table public.decisions enable row level security;
+revoke all on public.decisions from anon, authenticated;
+
+-- قائمة تصنيفات القرارات الافتراضية (لا تُستبدل إن كانت موجودة)
+insert into public.app_settings (key, value)
+values ('decision_classes', '["تنظيمي","إداري","مالي","تأديبي","تعميم","أخرى"]')
+on conflict (key) do nothing;
+
+-- قائمة القرارات (للمدير والموظف)، الأحدث أولاً
+create or replace function public.admin_list_decisions(p_secret text)
+returns setof public.decisions
+language plpgsql security definer set search_path = public as $$
+begin
+  if public.verify_password('أدمن', p_secret) is null then
+    return;
+  end if;
+  return query select * from public.decisions order by decision_date desc nulls last, created_at desc;
+end $$;
+
+-- إضافة قرار (p_id فارغ) أو تعديله (للمدير فقط)؛ الرابط يجب أن يبدأ بـ http:// أو https://
+create or replace function public.admin_save_decision(
+  p_secret text, p_id uuid, p_number text, p_date date, p_title text, p_subject text, p_url text, p_classification text
+) returns setof public.decisions
+language plpgsql security definer set search_path = public as $$
+declare
+  v_id  uuid := p_id;
+  v_url text := nullif(btrim(coalesce(p_url, '')), '');
+begin
+  if public.verify_password('مدير', p_secret) is null then
+    return;
+  end if;
+  if coalesce(btrim(p_number), '') = '' or coalesce(btrim(p_title), '') = '' then
+    raise exception 'رقم القرار وعنوانه إلزاميان';
+  end if;
+  if v_url is not null and v_url !~* '^https?://' then
+    raise exception 'الرابط يجب أن يبدأ بـ https://';
+  end if;
+  if v_id is null then
+    insert into public.decisions (decision_number, decision_date, title, subject, url, classification)
+    values (btrim(left(p_number, 60)), p_date, btrim(left(p_title, 300)), nullif(btrim(left(p_subject, 5000)), ''),
+            left(v_url, 1000), nullif(btrim(left(p_classification, 60)), ''))
+    returning id into v_id;
+  else
+    update public.decisions set
+      decision_number = btrim(left(p_number, 60)), decision_date = p_date, title = btrim(left(p_title, 300)),
+      subject = nullif(btrim(left(p_subject, 5000)), ''), url = left(v_url, 1000),
+      classification = nullif(btrim(left(p_classification, 60)), ''), updated_at = now()
+    where id = v_id;
+  end if;
+  return query select * from public.decisions where id = v_id;
+end $$;
+
+-- حذف قرار (للمدير فقط)
+create or replace function public.admin_delete_decision(p_secret text, p_id uuid)
+returns boolean
+language plpgsql security definer set search_path = public as $$
+begin
+  if public.verify_password('مدير', p_secret) is null then
+    return false;
+  end if;
+  delete from public.decisions where id = p_id;
+  return found;
+end $$;
+
+-- القوائم للأدمن (نسخة تضيف «تصنيفات القرارات»)
+create or replace function public.admin_get_lists(p_secret text)
+returns json
+language plpgsql security definer set search_path = public as $$
+begin
+  if public.verify_password('أدمن', p_secret) is null then
+    return null;
+  end if;
+  return json_build_object(
+    'classifications',  coalesce(public.setting('classifications'), '[]')::json,
+    'roles',            coalesce(public.setting('roles'), '[]')::json,
+    'decision_classes', coalesce(public.setting('decision_classes'), '[]')::json);
+end $$;
+
+-- حفظ قائمة (نسخة تقبل decision_classes؛ للمدير فقط)
+create or replace function public.admin_set_list(p_secret text, p_key text, p_items text[])
+returns text
+language plpgsql security definer set search_path = public as $$
+declare
+  v_items text[];
+begin
+  if public.verify_password('مدير', p_secret) is null or p_key not in ('classifications', 'roles', 'decision_classes') then
+    return 'INVALID';
+  end if;
+  select coalesce(array_agg(x order by o), '{}') into v_items from (
+    select btrim(left(x, 60)) as x, min(o) as o
+    from unnest(coalesce(p_items, '{}')) with ordinality as t(x, o)
+    where btrim(coalesce(x, '')) <> ''
+    group by btrim(left(x, 60))) u;
+  if cardinality(v_items) > 60 then
+    return 'INVALID';
+  end if;
+  insert into public.app_settings (key, value) values (p_key, to_json(v_items)::text)
+    on conflict (key) do update set value = excluded.value;
+  return 'OK';
+end $$;
+
+-- السماح للموقع باستدعاء الدوال الجديدة
+grant execute on function public.admin_list_decisions(text)                                          to anon, authenticated;
+grant execute on function public.admin_save_decision(text, uuid, text, date, text, text, text, text)  to anon, authenticated;
+grant execute on function public.admin_delete_decision(text, uuid)                                    to anon, authenticated;
+
+-- ---------------------------------------------------------------------
+-- 28) كلمة مرور الأدمن الأولى — غيّر 'غيّرني-123' قبل التنفيذ (6 أحرف على الأقل)
 -- ---------------------------------------------------------------------
 insert into public.access_passwords (role, password, holder_name)
 values ('أدمن', 'غيّرني-123', 'المدير');

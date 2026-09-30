@@ -18,6 +18,8 @@
 //    2026-09-30  تسلسل الشكوى: الحالة والنتيجة للعرض فقط (من آخر جلسة)، حالتا «قيد مراجعة الاعتراض» و«جاري متابعة
 //                الاعتراض»، الاعتراض بعد الإغلاق فقط والمعترض يرى العنوان فقط، علامة «⚖️ بعد الاعتراض» على النتيجة،
 //                لا جلسات جديدة للمغلقة، «إغلاق عبر جلسة» في مربع «المطلوب»، وأزرار الجلسات والاعتراض بالأخضر.
+//    2026-09-30  قسم «📑 القرارات الإدارية»: رقم القرار وتاريخه وعنوانه وموضوعه ورابطه وتصنيفه، بحث متقدم (حقل، تصنيف،
+//                فترة، ترتيب)، شرائح التصنيفات بأعدادها، فرز بالعناوين، تفاصيل القرار، وتصدير Excel؛ الإضافة للمدير.
 // =======================================================================
 // استيراد خطافات React المستخدمة في المكونات
 const { useState, useEffect, useCallback } = React;
@@ -31,6 +33,7 @@ const isConfigured = !!cfg.SUPABASE_URL && !cfg.SUPABASE_URL.includes("YOUR_") &
 // قائمتا التصنيفات والصفات: تبدآن من config.js، ثم تُستبدل محتوياتهما بما حفظه الأدمن في «الإعدادات»
 const CLASSIFICATIONS = [...(cfg.CLASSIFICATIONS || ["أخرى"])];
 const ROLES = [...(cfg.ROLES || ["حاج", "مرافق", "رئيس مجموعة", "مشرف", "مندوب", "موظف", "سائق"])];
+const DECISION_CLASSES = ["تنظيمي", "إداري", "مالي", "تأديبي", "تعميم", "أخرى"];   // تصنيفات القرارات (تُستبدل من الإعدادات)
 const replaceList = (list, items) => { if (Array.isArray(items) && items.length) list.splice(0, list.length, ...items); };
 
 // حالات الشكوى (تطابق القيد في schema.sql) واسم لاتيني لكل حالة لاستخدامه في الألوان
@@ -836,6 +839,7 @@ const SECTIONS = {
   complaints: { title: "📋 الشكاوى" },
   sessions:   { title: "🗓️ الجلسات" },
   links:      { title: "🔗 إرسال رابط" },
+  decisions:  { title: "📑 القرارات الإدارية" },
   access:     { title: "🔐 دخول المشتكين", manager: true },
   viewers:    { title: "📊 كلمات مرور الإدارة", manager: true },
   staff:      { title: "👥 الموظفون", manager: true },
@@ -886,7 +890,8 @@ function AdminPage({ secret }) {
   useEffect(() => {
     sb.rpc("admin_get_lists", { p_secret: secret }).then(({ data }) => {
       if (!data) return;
-      replaceList(CLASSIFICATIONS, data.classifications); replaceList(ROLES, data.roles); setListsVer(n => n + 1);
+      replaceList(CLASSIFICATIONS, data.classifications); replaceList(ROLES, data.roles);
+      replaceList(DECISION_CLASSES, data.decision_classes); setListsVer(n => n + 1);
     });
   }, [secret]);
 
@@ -931,6 +936,7 @@ function AdminPage({ secret }) {
           </div>
           {tab === "today" && <AdminDue secret={secret} rows={rows} onSaved={onSaved} reload={reload} onOpen={c => openComplaint(c, true)} />}
           {tab === "links" && <AdminLinks secret={secret} isManager={isManager} />}
+          {tab === "decisions" && <AdminDecisions secret={secret} isManager={isManager} />}
           {tab === "complaints" && <AdminComplaints secret={secret} rows={rows} onSaved={onSaved} reload={reload} onOpen={c => openComplaint(c)}
                                      initialSearch={start.search || ""} initialFilter={start.filter || "الكل"} />}
           {tab === "sessions" && <AdminSessions secret={secret} version={sessVer} onOpen={c => openComplaint(c)} />}
@@ -987,6 +993,7 @@ function AdminHome({ me, isManager, rows, go }) {
         <Tile icon="📋" title="كل الشكاوى" count={open} sub="مفتوحة" onClick={() => go("complaints")} />
         <Tile icon="🗓️" title="الجلسات" onClick={() => go("sessions")} />
         <Tile icon="🔗" title="إرسال رابط" sub="لمشتكٍ أو للإدارة" onClick={() => go("links")} />
+        <Tile icon="📑" title="القرارات الإدارية" sub="بحث وروابط" onClick={() => go("decisions")} />
       </div>
       {isManager && (
         <>
@@ -1377,6 +1384,8 @@ function AdminSettings({ secret, rows, reload }) {
     <SeasonCard secret={secret} reload={reload} />
     <ListCard secret={secret} listKey="classifications" list={CLASSIFICATIONS} title="🏷️ التصنيفات"
       hint="تظهر في تفاصيل الشكوى وفي تصفية جدول الشكاوى، مثل: تقييم المجموعات" />
+    <ListCard secret={secret} listKey="decision_classes" list={DECISION_CLASSES} title="📑 تصنيفات القرارات الإدارية"
+      hint="تظهر في قسم «القرارات الإدارية» عند إضافة قرار وفي التصفية" />
     <ListCard secret={secret} listKey="roles" list={ROLES} title="🪪 الصفات"
       hint="تظهر للمشتكي في نموذج الشكوى لاختيار صفته وصفة المشتكى عليه (مع خيار «أخرى»)" />
     <ExcelLockCard secret={secret} />
@@ -2311,6 +2320,227 @@ function AdminSessions({ secret, version, onOpen }) {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// القرارات الإدارية: قائمة القرارات مع بحث متقدم وتصفية بالتصنيف والتاريخ وفرز؛ الضغط على قرار يعرض
+// تفاصيله ورابطه. المدير يضيف ويعدّل ويحذف، والموظف يطّلع ويبحث فقط
+// ---------------------------------------------------------------------
+// أعمدة الفرز: المفتاح، العنوان، وقيمة المقارنة
+const DECISION_SORTS = {
+  number: { label: "رقم القرار", get: d => d.decision_number || "" },
+  date: { label: "التاريخ", get: d => d.decision_date || "" },
+  title: { label: "العنوان", get: d => d.title || "" },
+  classification: { label: "التصنيف", get: d => d.classification || "" },
+};
+
+function AdminDecisions({ secret, isManager }) {
+  // القرارات، أدوات البحث والتصفية والفرز، القرار المعروض، نموذج الإضافة/التعديل، والرسائل
+  const [list, setList] = useState(null);
+  const [q, setQ] = useState("");
+  const [klass, setKlass] = useState("");
+  const [adv, setAdv] = useState(false);                        // لوحة البحث المتقدم
+  const [field, setField] = useState("all");                    // البحث في: الكل / الرقم / العنوان / الموضوع
+  const [range, setRange] = useState({ from: "", to: "" });
+  const [sort, setSort] = useState({ key: "date", dir: -1 });
+  const [shown, setShown] = useState(null);
+  const [form, setForm] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+
+  // جلب القرارات
+  const load = useCallback(async () => {
+    const { data, error } = await sb.rpc("admin_list_decisions", { p_secret: secret });
+    if (error) { setList([]); return setMsg({ type: "error", text: "تعذّر جلب القرارات (نفّذ القسم 27 من schema.sql في Supabase)." }); }
+    setList(data || []);
+  }, [secret]);
+  useEffect(() => { load(); }, [load]);
+
+  // البحث (في كل الحقول أو حقل محدد) ← التصنيف ← الفترة ← الفرز (الأرقام تُفرز كأرقام)
+  const term = q.trim();
+  const inField = d => field === "number" ? [d.decision_number] : field === "title" ? [d.title] : field === "subject" ? [d.subject]
+    : [d.decision_number, d.title, d.subject, d.classification];
+  const base = (list || []).filter(d =>
+    (!term || inField(d).some(v => (v || "").includes(term))) &&
+    (!range.from || (d.decision_date || "") >= range.from) &&
+    (!range.to || ((d.decision_date || "") !== "" && d.decision_date <= range.to)));
+  const count = k => base.filter(d => !k || d.classification === k).length;
+  const visible = base.filter(d => !klass || d.classification === klass).sort((a, b) =>
+    DECISION_SORTS[sort.key].get(a).localeCompare(DECISION_SORTS[sort.key].get(b), "ar", { numeric: true }) * sort.dir);
+  const classes = [...new Set([...DECISION_CLASSES, ...(list || []).map(d => d.classification)].filter(Boolean))];
+
+  // الضغط على عنوان عمود: فرز تصاعدي ← تنازلي
+  const toggleSort = key => setSort(s => ({ key, dir: s.key === key ? -s.dir : 1 }));
+  const arrow = key => sort.key === key ? (sort.dir === 1 ? " ▲" : " ▼") : "";
+
+  // نموذج فارغ، أو تعبئته من قرار للتعديل
+  const blank = () => ({ id: null, number: "", date: toDateInput(new Date()), title: "", subject: "", url: "", classification: "" });
+  const editOf = d => ({ id: d.id, number: d.decision_number, date: d.decision_date || "", title: d.title, subject: d.subject || "", url: d.url || "", classification: d.classification || "" });
+  const setF = key => e => setForm(f => ({ ...f, [key]: e.target.value }));
+
+  // الحفظ عبر admin_save_decision (إضافة أو تعديل)
+  async function save(e) {
+    e.preventDefault();
+    if (!form.number.trim() || !form.title.trim()) return setMsg({ type: "error", text: "رقم القرار وعنوانه إلزاميان." });
+    if (form.url.trim() && !/^https?:\/\//i.test(form.url.trim())) return setMsg({ type: "error", text: "الرابط يجب أن يبدأ بـ https://" });
+    setBusy(true); setMsg(null);
+    const { data, error } = await sb.rpc("admin_save_decision", {
+      p_secret: secret, p_id: form.id, p_number: form.number, p_date: form.date || null, p_title: form.title,
+      p_subject: form.subject, p_url: form.url, p_classification: form.classification,
+    });
+    setBusy(false);
+    if (error || !data || !data.length) return setMsg({ type: "error", text: "تعذّر الحفظ، يرجى المحاولة مرة أخرى." });
+    setMsg({ type: "ok", text: form.id ? "✅ تم تعديل القرار." : "✅ أُضيف القرار." });
+    setForm(null); setShown(data[0]); load();
+  }
+
+  // حذف قرار بعد التأكيد
+  async function remove(d) {
+    if (!window.confirm(`حذف القرار رقم ${d.decision_number}؟`)) return;
+    const { data } = await sb.rpc("admin_delete_decision", { p_secret: secret, p_id: d.id });
+    if (!data) return setMsg({ type: "error", text: "تعذّر الحذف." });
+    setShown(null); setMsg({ type: "ok", text: "حُذف القرار." }); load();
+  }
+
+  // تصدير القرارات الظاهرة إلى Excel (مقفول للعرض فقط)
+  function exportXl() {
+    saveWorkbook([{ name: "القرارات الإدارية", headers: ["رقم القرار", "التاريخ", "العنوان", "التصنيف", "الموضوع", "الرابط"],
+      rows: visible.map(d => [d.decision_number, d.decision_date, d.title, d.classification, d.subject, d.url]) }],
+      `القرارات-الإدارية-${toDateInput(new Date())}.xlsx`).catch(e => setMsg({ type: "error", text: e.message || NET_ERR }));
+  }
+
+  // العرض: أزرار الإضافة والتصدير، البحث والبحث المتقدم، شرائح التصنيفات، الجدول، ثم نافذتا التفاصيل والنموذج
+  return (
+    <div>
+      {msg && <Alert type={msg.type}>{msg.text}</Alert>}
+      <div className="row" style={{ marginBottom: 10 }}>
+        {isManager && <button type="button" className="btn" onClick={() => { setForm(blank()); setMsg(null); }}>➕ إضافة قرار</button>}
+        <button type="button" className="btn secondary" disabled={!visible.length} onClick={exportXl}>⬇ تصدير Excel</button>
+      </div>
+      <div className="row" style={{ flexWrap: "nowrap", marginBottom: 8 }}>
+        <input type="search" value={q} onChange={e => setQ(e.target.value)} placeholder="🔍 ابحث برقم القرار أو العنوان أو الموضوع" />
+        <button type="button" className={`btn ${adv ? "" : "secondary"}`} onClick={() => setAdv(v => !v)}>⚙️ بحث متقدم</button>
+      </div>
+      {adv && (
+        <div className="card adv-search">
+          <div className="grid">
+            <Field label="البحث في">
+              <select value={field} onChange={e => setField(e.target.value)}>
+                <option value="all">كل الحقول</option>
+                <option value="number">رقم القرار</option>
+                <option value="title">العنوان</option>
+                <option value="subject">الموضوع</option>
+              </select>
+            </Field>
+            <Field label="التصنيف">
+              <select value={klass} onChange={e => setKlass(e.target.value)}>
+                <option value="">كل التصنيفات</option>
+                {classes.map(k => <option key={k} value={k}>{k}</option>)}
+              </select>
+            </Field>
+            <Field label="من تاريخ"><input type="date" value={range.from} onChange={e => setRange(r => ({ ...r, from: e.target.value }))} /></Field>
+            <Field label="إلى تاريخ"><input type="date" value={range.to} onChange={e => setRange(r => ({ ...r, to: e.target.value }))} /></Field>
+            <Field label="الترتيب حسب">
+              <div className="row" style={{ flexWrap: "nowrap" }}>
+                <select value={sort.key} onChange={e => setSort(s => ({ ...s, key: e.target.value }))}>
+                  {Object.keys(DECISION_SORTS).map(k => <option key={k} value={k}>{DECISION_SORTS[k].label}</option>)}
+                </select>
+                <select value={sort.dir} onChange={e => setSort(s => ({ ...s, dir: Number(e.target.value) }))}>
+                  <option value={-1}>تنازلي</option>
+                  <option value={1}>تصاعدي</option>
+                </select>
+              </div>
+            </Field>
+          </div>
+          <button type="button" className="btn danger-text" style={{ marginTop: 8 }}
+            onClick={() => { setQ(""); setField("all"); setKlass(""); setRange({ from: "", to: "" }); setSort({ key: "date", dir: -1 }); }}>مسح كل التصفيات</button>
+        </div>
+      )}
+      <div className="chips">
+        <button className={!klass ? "active" : ""} onClick={() => setKlass("")}>الكل ({count("")})</button>
+        {classes.map(k => <button key={k} className={klass === k ? "active" : ""} onClick={() => setKlass(k)}>{k} ({count(k)})</button>)}
+      </div>
+
+      <div className="card" style={{ padding: 0 }}>
+        {list === null ? <Loading /> : visible.length === 0 ? <div className="empty">لا توجد قرارات{term || klass || range.from || range.to ? " مطابقة" : ""}</div> : (
+          <div className="table-wrap">
+            <table className="sheet">
+              <thead><tr>
+                {Object.keys(DECISION_SORTS).map(k => <th key={k} className="sortable" onClick={() => toggleSort(k)}>{DECISION_SORTS[k].label}{arrow(k)}</th>)}
+                <th>الموضوع</th><th>الرابط</th>
+              </tr></thead>
+              <tbody>
+                {visible.map(d => (
+                  <tr key={d.id} className="clickable" onClick={() => setShown(d)}>
+                    <td><b dir="ltr">{d.decision_number}</b></td>
+                    <td>{d.decision_date ? fmtDate(d.decision_date) : "—"}</td>
+                    <td><b>{d.title}</b></td>
+                    <td>{d.classification ? <span className="badge dec-tag">{d.classification}</span> : "—"}</td>
+                    <td className="wrap"><span className="clip">{d.subject || "—"}</span></td>
+                    <td>{d.url ? <a href={d.url} target="_blank" rel="noopener" onClick={e => e.stopPropagation()}>🔗 فتح</a> : "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+      {list && list.length > 0 && <p className="muted center" style={{ fontSize: 13 }}>{visible.length} من {list.length} قرار · اضغط على أي قرار لعرض تفاصيله</p>}
+
+      {shown && !form && (
+        <div className="modal-back" onClick={() => setShown(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <div className="modal-close"><button className="btn secondary sm" onClick={() => setShown(null)}>✕ إغلاق</button></div>
+            <div className="card">
+              <div className="c-head">
+                <div><div className="c-no">📑 قرار رقم {shown.decision_number}</div>
+                  <div className="meta"><span>📅 {shown.decision_date ? fmtDate(shown.decision_date) : "بلا تاريخ"}</span></div></div>
+                {shown.classification && <span className="badge dec-tag">{shown.classification}</span>}
+              </div>
+              <div className="c-title" style={{ marginTop: 0 }}>{shown.title}</div>
+              <div className="field-label" style={{ marginTop: 10 }}>موضوع القرار</div>
+              <div className="subject">{shown.subject || <span className="muted">—</span>}</div>
+              {shown.url && <a className="btn block" href={shown.url} target="_blank" rel="noopener" style={{ marginTop: 12 }}>🔗 فتح القرار</a>}
+              {isManager && (
+                <div className="grid" style={{ gridTemplateColumns: "1fr 1fr", marginTop: 10 }}>
+                  <button type="button" className="btn secondary" onClick={() => { setForm(editOf(shown)); setMsg(null); }}>✏️ تعديل</button>
+                  <button type="button" className="btn secondary" style={{ color: "var(--danger)" }} onClick={() => remove(shown)}>🗑️ حذف</button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {form && (
+        <div className="modal-back" onClick={() => setForm(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <div className="modal-close"><button className="btn secondary sm" onClick={() => setForm(null)}>✕ إغلاق</button></div>
+            <form className="card" onSubmit={save}>
+              <h2>{form.id ? "✏️ تعديل قرار" : "➕ قرار إداري جديد"}</h2>
+              {msg && msg.type === "error" && <Alert type="error">{msg.text}</Alert>}
+              <div className="grid">
+                <Field label="رقم القرار الإداري" required><input type="text" dir="ltr" value={form.number} onChange={setF("number")} maxLength={60} /></Field>
+                <Field label="تاريخ القرار"><input type="date" value={form.date} onChange={setF("date")} /></Field>
+                <Field label="عنوان القرار" required full><input type="text" value={form.title} onChange={setF("title")} maxLength={300} /></Field>
+                <Field label="التصنيف">
+                  <select value={form.classification} onChange={setF("classification")}>
+                    <option value="">— اختر —</option>
+                    {classes.map(k => <option key={k} value={k}>{k}</option>)}
+                  </select>
+                </Field>
+                <Field label="رابط القرار" hint="رابط ملف القرار على Drive أو غيره">
+                  <input type="url" dir="ltr" value={form.url} onChange={setF("url")} maxLength={1000} placeholder="https://" />
+                </Field>
+                <Field label="موضوع القرار" full><textarea style={{ minHeight: 100 }} value={form.subject} onChange={setF("subject")} maxLength={5000} /></Field>
+              </div>
+              <button className="btn block" style={{ marginTop: 14 }} disabled={busy}>{busy ? "جارٍ الحفظ…" : "💾 حفظ القرار"}</button>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
