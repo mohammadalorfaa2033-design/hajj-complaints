@@ -795,10 +795,16 @@ function ComplaintForm({ code, onDone, onRejected }) {
     if (!/^\d{7,15}$/.test(form.phone)) return setError("رقم الهاتف غير صالح. اكتب الأرقام فقط مع رمز الدولة.");
     if (form.contact && !/^\d{7,15}$/.test(form.contact)) return setError("رقم واتس / تلغرام غير صالح. اكتب الأرقام فقط مع رمز الدولة.");
     setBusy(true);
-    const { data, error: rpcErr } = await sb.rpc("submit_complaint", {
+    let { data, error: rpcErr } = await sb.rpc("submit_complaint", {
       p_code: code, p_complainant_name: form.name, p_complainant_role: form.crole, p_phone_number: form.phone, p_contact_number: form.contact,
       p_accused_name: form.accused, p_accused_role: form.arole, p_title: form.title, p_subject: form.subject,
     });
+    // قاعدة لم يُنفَّذ فيها القسم 23 بعد: النسخة القديمة، والصفة بين قوسين بعد الاسم حتى لا تضيع
+    if (rpcErr && /submit_complaint|function/i.test(rpcErr.message || "") && !rpcErr.message.includes("INVALID_CODE"))
+      ({ data, error: rpcErr } = await sb.rpc("submit_complaint", {
+        p_code: code, p_complainant_name: withRole(form.name.trim(), form.crole.trim()), p_phone_number: form.phone, p_contact_number: form.contact,
+        p_accused_name: withRole(form.accused.trim(), form.arole.trim()), p_title: form.title, p_subject: form.subject,
+      }));
     setBusy(false);
     if (rpcErr && rpcErr.message.includes("INVALID_CODE"))
       return onRejected(code ? "كلمة المرور لم تعد صالحة. اطلب كلمة مرور جديدة." : "التقديم المباشر غير متاح حالياً. أدخل كلمة المرور.");
