@@ -55,6 +55,8 @@
 --    2026-09-30  القسم 21: المواسم — رقم الشكوى = الموسم-الرقم (1448-00001) ويبدأ من 1 في كل موسم؛
 --                الموسم الحالي يحدده الأدمن (admin_get_season / admin_set_season)، وتصفية التقارير بالموسم.
 --    2026-09-30  القسم 22: كلمة مرور قفل ملفات Excel (admin_get_excel_lock / admin_set_excel_lock).
+--    2026-09-30  القسم 23: صفة المشتكي وصفة المشتكى عليه؛ عنوان الجلسة وموضوعها؛ قائمتا التصنيفات والصفات
+--                يعدّلهما الأدمن؛ إلغاء سجل الشكوى وسجل الإحالة (حذف complaint_log)؛ سبب التمديد في الشكوى.
 -- =====================================================================
 
 -- ---------------------------------------------------------------------
@@ -156,6 +158,12 @@ drop function if exists public.viewer_seasons(text);
 drop table if exists public.season_counters cascade;
 drop function if exists public.admin_get_excel_lock(text);
 drop function if exists public.admin_set_excel_lock(text, text);
+drop function if exists public.get_form_lists();
+drop function if exists public.admin_get_lists(text);
+drop function if exists public.admin_set_list(text, text, text[]);
+drop function if exists public.submit_complaint(text, text, text, text, text, text, text, text, text);
+drop function if exists public.admin_add_session(text, uuid, timestamptz, text, text, text, text, text);
+drop function if exists public.admin_update_session(text, uuid, timestamptz, text, text, text, text, text);
 
 -- تفعيل pgcrypto لتوليد أرقام عشوائية آمنة
 create extension if not exists pgcrypto with schema extensions;
@@ -2018,7 +2026,292 @@ grant execute on function public.admin_get_excel_lock(text)       to anon, authe
 grant execute on function public.admin_set_excel_lock(text, text) to anon, authenticated;
 
 -- ---------------------------------------------------------------------
--- 23) كلمة مرور الأدمن الأولى — غيّر 'غيّرني-123' قبل التنفيذ (6 أحرف على الأقل)
+-- 23) الصفة، عنوان الجلسة وموضوعها، قوائم يعدّلها الأدمن، وإلغاء سجل الشكوى
+--     - صفة المشتكي وصفة المشتكى عليه (لتمييز الأسماء المتشابهة)
+--     - عنوان الجلسة وموضوعها (قبل نتيجة الجلسة)
+--     - قائمتا «التصنيفات» و«الصفات» في app_settings يعدّلهما الأدمن من «الإعدادات»
+--     - سجل الشكوى وسجل الإحالة يُلغيان بطلب الإدارة (يُحذف الجدول ويتوقف التسجيل)
+--     - سبب التمديد الاستثنائي للاعتراض يُحفظ في الشكوى نفسها (كان في السجل)
+--     يُنفَّذ وحده أيضاً كتحديث لقاعدة موجودة (يحذف سجل الشكاوى فقط)
+-- ---------------------------------------------------------------------
+-- الحقول الجديدة
+alter table public.complaints add column if not exists complainant_role text;              -- صفة المشتكي
+alter table public.complaints add column if not exists accused_role     text;              -- صفة المشتكى عليه
+alter table public.complaints add column if not exists objection_extension_reason text;    -- سبب آخر تمديد استثنائي
+alter table public.sessions   add column if not exists title text;                         -- عنوان الجلسة
+alter table public.sessions   add column if not exists topic text;                         -- موضوع الجلسة
+
+-- القائمتان الافتراضيتان (نص JSON)؛ لا تُستبدلان إن كانتا موجودتين
+insert into public.app_settings (key, value) values
+  ('classifications', '["السكن","النقل والتنقلات","الإعاشة والوجبات","التأشيرات والوثائق","الأمور المالية","سلوك وتعامل","الخدمات الصحية","تقييم المجموعات","أخرى"]'),
+  ('roles', '["حاج","مرافق","رئيس مجموعة","مشرف","مندوب","موظف","سائق"]')
+on conflict (key) do nothing;
+
+-- إلغاء السجل: التسجيل يصبح بلا أثر، وحذف مشغّلي السجل والجدول ودوال عرضه
+create or replace function public.log_complaint(
+  p_id uuid, p_event text, p_field text, p_old text, p_new text, p_actor text default null, p_note text default null
+) returns void language plpgsql as $$
+begin
+  return;  -- السجل مُلغى بطلب الإدارة
+end $$;
+drop trigger if exists trg_complaints_log_insert on public.complaints;
+drop trigger if exists trg_complaints_log_update on public.complaints;
+drop function if exists public.complaints_log_insert();
+drop function if exists public.complaints_log_update();
+drop function if exists public.admin_complaint_log(text, uuid);
+drop function if exists public.admin_export_log(text);
+drop table if exists public.complaint_log cascade;
+
+-- قائمة الصفات لنموذج الشكوى (عامة: لا تحتاج كلمة مرور)
+create or replace function public.get_form_lists()
+returns json
+language sql stable security definer set search_path = public as $$
+  select json_build_object('roles', coalesce(public.setting('roles'), '[]')::json);
+$$;
+
+-- الأدمن: القائمتان معاً
+create or replace function public.admin_get_lists(p_secret text)
+returns json
+language plpgsql security definer set search_path = public as $$
+begin
+  if public.verify_password('أدمن', p_secret) is null then
+    return null;
+  end if;
+  return json_build_object(
+    'classifications', coalesce(public.setting('classifications'), '[]')::json,
+    'roles',           coalesce(public.setting('roles'), '[]')::json);
+end $$;
+
+-- الأدمن: حفظ قائمة (classifications أو roles) — عناصر نصية بلا تكرار، حتى 60 عنصراً و60 حرفاً لكلٍّ
+-- تُرجع: 'OK' أو 'INVALID'
+create or replace function public.admin_set_list(p_secret text, p_key text, p_items text[])
+returns text
+language plpgsql security definer set search_path = public as $$
+declare
+  v_items text[];
+begin
+  if public.verify_password('أدمن', p_secret) is null or p_key not in ('classifications', 'roles') then
+    return 'INVALID';
+  end if;
+  select coalesce(array_agg(x order by o), '{}') into v_items from (
+    select btrim(left(x, 60)) as x, min(o) as o
+    from unnest(coalesce(p_items, '{}')) with ordinality as t(x, o)
+    where btrim(coalesce(x, '')) <> ''
+    group by btrim(left(x, 60))) u;
+  if cardinality(v_items) > 60 then
+    return 'INVALID';
+  end if;
+  insert into public.app_settings (key, value) values (p_key, to_json(v_items)::text)
+    on conflict (key) do update set value = excluded.value;
+  return 'OK';
+end $$;
+
+-- تقديم الشكوى (نسخة بالصفتين): الصفتان إلزاميتان
+drop function if exists public.submit_complaint(text, text, text, text, text, text, text);
+drop function if exists public.submit_complaint(text, text, text, text, text, text, text, text, text);
+create function public.submit_complaint(
+  p_code             text,
+  p_complainant_name text,
+  p_complainant_role text,
+  p_phone_number     text,
+  p_contact_number   text,
+  p_accused_name     text,
+  p_accused_role     text,
+  p_title            text,
+  p_subject          text
+) returns table (complaint_number text, tracking_code text)
+language plpgsql security definer set search_path = public as $$
+declare
+  v_mode    text := coalesce(public.setting('access_mode'), 'private');
+  v_code    text := public.normalize_code(p_code);
+  v_phone   text := public.normalize_phone(p_phone_number);
+  v_contact text := public.normalize_phone(p_contact_number);
+  v_pw_id   uuid;
+  v_id      uuid;
+begin
+  -- الحقول الإلزامية وأطوالها (واتس/تلغرام اختياري)
+  if coalesce(btrim(p_complainant_name), '') = '' or coalesce(btrim(p_complainant_role), '') = '' or v_phone is null
+     or coalesce(btrim(p_accused_name), '') = '' or coalesce(btrim(p_accused_role), '') = ''
+     or coalesce(btrim(p_title), '') = '' or coalesce(btrim(p_subject), '') = '' then
+    raise exception 'الحقول الإلزامية ناقصة';
+  end if;
+  if length(p_complainant_name) > 200 or length(p_complainant_role) > 100 or length(v_phone) > 20
+     or length(coalesce(v_contact, '')) > 20 or length(p_accused_name) > 200 or length(p_accused_role) > 100
+     or length(p_title) > 150 or length(p_subject) > 5000 then
+    raise exception 'تجاوزت البيانات الطول المسموح';
+  end if;
+
+  -- التحقق من الدخول؛ كلمة المرور الخاصة تُستهلك (مرة واحدة)
+  if not public.code_valid(p_code) then
+    raise exception 'INVALID_CODE';
+  end if;
+  if v_code <> '' and v_mode = 'private' then
+    update public.access_passwords set used_at = now()
+     where role = 'مشتكي' and password = v_code and active and used_at is null
+    returning id into v_pw_id;
+    if v_pw_id is null then
+      raise exception 'INVALID_CODE';
+    end if;
+  end if;
+
+  -- تسجيل الشكوى (الرقم والرمز والتاريخ والموسم من المشغّل)
+  insert into public.complaints as c (complainant_name, complainant_role, phone_number, contact_number,
+                                      accused_name, accused_role, title, subject, access_code)
+  values (btrim(p_complainant_name), btrim(p_complainant_role), v_phone, v_contact,
+          btrim(p_accused_name), btrim(p_accused_role), btrim(p_title), btrim(p_subject),
+          case when v_pw_id is not null then v_code end)
+  returning c.id, c.complaint_number, c.tracking_code into v_id, complaint_number, tracking_code;
+  if v_pw_id is not null then
+    update public.access_passwords set complaint_id = v_id where id = v_pw_id;
+  end if;
+  return next;
+end $$;
+
+-- تمديد استثنائي لمهلة الاعتراض (نسخة تحفظ السبب في الشكوى)
+create or replace function public.admin_set_objection_deadline(p_secret text, p_id uuid, p_deadline timestamptz, p_reason text)
+returns setof public.complaints
+language plpgsql security definer set search_path = public as $$
+begin
+  if public.verify_password('أدمن', p_secret) is null then
+    return;
+  end if;
+  if coalesce(btrim(p_reason), '') = '' then
+    raise exception 'يرجى كتابة سبب التمديد الاستثنائي';
+  end if;
+  if p_deadline is null or p_deadline <= now() then
+    raise exception 'الموعد الجديد يجب أن يكون في المستقبل';
+  end if;
+  update public.complaints set objection_deadline = p_deadline, objection_extension_reason = btrim(left(p_reason, 500))
+   where id = p_id and objection_code is not null and objection_at is null;
+  return query select * from public.complaints where id = p_id;
+end $$;
+
+-- قائمة الجلسات (نسخة بالعنوان والموضوع)
+drop function if exists public.admin_list_sessions(text, uuid);
+create function public.admin_list_sessions(p_secret text, p_complaint_id uuid)
+returns table (id uuid, complaint_id uuid, complaint_number text, complainant_name text,
+               session_at timestamptz, title text, topic text, referred_to text, result text, status text)
+language plpgsql security definer set search_path = public as $$
+begin
+  if public.verify_password('أدمن', p_secret) is null then
+    return;
+  end if;
+  return query
+    select s.id, s.complaint_id, c.complaint_number, c.complainant_name,
+           s.session_at, s.title, s.topic, s.referred_to, s.result, s.status
+    from public.sessions s
+    join public.complaints c on c.id = s.complaint_id
+    where p_complaint_id is null or s.complaint_id = p_complaint_id
+    order by s.session_at desc
+    limit 2000;
+end $$;
+
+-- إضافة جلسة (نسخة بالعنوان والموضوع)؛ المشغّل يرحّل قيمها إلى الشكوى
+drop function if exists public.admin_add_session(text, uuid, timestamptz, text, text, text);
+drop function if exists public.admin_add_session(text, uuid, timestamptz, text, text, text, text, text);
+create function public.admin_add_session(
+  p_secret text, p_complaint_id uuid, p_session_at timestamptz,
+  p_title text, p_topic text, p_referred_to text, p_result text, p_status text
+) returns setof public.complaints
+language plpgsql security definer set search_path = public as $$
+begin
+  if public.verify_password('أدمن', p_secret) is null then
+    return;
+  end if;
+  insert into public.sessions (complaint_id, session_at, title, topic, referred_to, result, status)
+  values (p_complaint_id, coalesce(p_session_at, now()),
+          nullif(btrim(left(p_title, 200)), ''), nullif(btrim(left(p_topic, 2000)), ''),
+          nullif(btrim(left(p_referred_to, 200)), ''), nullif(btrim(left(p_result, 2000)), ''), p_status);
+  return query select * from public.complaints where id = p_complaint_id;
+end $$;
+
+-- تعديل جلسة (نسخة بالعنوان والموضوع)
+drop function if exists public.admin_update_session(text, uuid, timestamptz, text, text, text);
+drop function if exists public.admin_update_session(text, uuid, timestamptz, text, text, text, text, text);
+create function public.admin_update_session(
+  p_secret text, p_id uuid, p_session_at timestamptz,
+  p_title text, p_topic text, p_referred_to text, p_result text, p_status text
+) returns setof public.complaints
+language plpgsql security definer set search_path = public as $$
+declare
+  v_cid uuid;
+begin
+  if public.verify_password('أدمن', p_secret) is null then
+    return;
+  end if;
+  update public.sessions set
+    session_at  = coalesce(p_session_at, session_at),
+    title       = nullif(btrim(left(p_title, 200)), ''),
+    topic       = nullif(btrim(left(p_topic, 2000)), ''),
+    referred_to = nullif(btrim(left(p_referred_to, 200)), ''),
+    result      = nullif(btrim(left(p_result, 2000)), ''),
+    status      = p_status
+  where id = p_id
+  returning complaint_id into v_cid;
+  return query select * from public.complaints where id = v_cid;
+end $$;
+
+-- بطاقة التقارير (نسخة بالصفتين وعنوان الجلسة وموضوعها، وبلا سجل)
+create or replace function public.viewer_complaint_card(p_code text, p_number text)
+returns json
+language plpgsql security definer set search_path = public as $$
+declare
+  v_id uuid;
+begin
+  if public.verify_password('إدارة', p_code) is null
+     or coalesce(public.setting('report_card_enabled'), 'off') <> 'on' then
+    return null;
+  end if;
+  select id into v_id from public.complaints where complaint_number = p_number;
+  if v_id is null then
+    return null;
+  end if;
+  return json_build_object(
+    'complaint', (select row_to_json(x) from (
+        select complaint_number, received_date, complainant_name, complainant_role, phone_number, contact_number,
+               accused_name, accused_role, title, subject, classification, referred_to, status, result,
+               complainant_result, accused_result, closed_date, objection_text, objection_at
+        from public.complaints where id = v_id) x),
+    'sessions', coalesce((select json_agg(s order by s.session_at desc) from (
+        select session_at, title, topic, referred_to, result, status from public.sessions where complaint_id = v_id) s), '[]'::json));
+end $$;
+
+-- التقارير (نسخة بالصفتين)
+drop function if exists public.viewer_report(text, timestamptz, timestamptz, text);
+create function public.viewer_report(p_code text, p_from timestamptz, p_to timestamptz, p_season text)
+returns table (complaint_number text, season text, status text, complainant_name text, complainant_role text,
+               accused_name text, accused_role text, title text, classification text,
+               subject text, result text, received_date timestamptz, closed_date timestamptz)
+language plpgsql security definer set search_path = public as $$
+begin
+  if public.verify_password('إدارة', p_code) is null then
+    return;
+  end if;
+  return query
+    select c.complaint_number, c.season, c.status, c.complainant_name, c.complainant_role,
+           c.accused_name, c.accused_role, c.title, c.classification,
+           c.subject, c.result, c.received_date, c.closed_date
+    from public.complaints c
+    where (p_from is null or c.received_date >= p_from)
+      and (p_to   is null or c.received_date <  p_to)
+      and (coalesce(p_season, '') = '' or c.season = p_season)
+    order by c.received_date desc;
+end $$;
+
+-- السماح للموقع باستدعاء الدوال الجديدة والمستبدلة
+grant execute on function public.get_form_lists()                                                    to anon, authenticated;
+grant execute on function public.admin_get_lists(text)                                               to anon, authenticated;
+grant execute on function public.admin_set_list(text, text, text[])                                  to anon, authenticated;
+grant execute on function public.submit_complaint(text, text, text, text, text, text, text, text, text) to anon, authenticated;
+grant execute on function public.admin_set_objection_deadline(text, uuid, timestamptz, text)         to anon, authenticated;
+grant execute on function public.admin_list_sessions(text, uuid)                                     to anon, authenticated;
+grant execute on function public.admin_add_session(text, uuid, timestamptz, text, text, text, text, text)    to anon, authenticated;
+grant execute on function public.admin_update_session(text, uuid, timestamptz, text, text, text, text, text) to anon, authenticated;
+grant execute on function public.viewer_complaint_card(text, text)                                   to anon, authenticated;
+grant execute on function public.viewer_report(text, timestamptz, timestamptz, text)                 to anon, authenticated;
+
+-- ---------------------------------------------------------------------
+-- 24) كلمة مرور الأدمن الأولى — غيّر 'غيّرني-123' قبل التنفيذ (6 أحرف على الأقل)
 -- ---------------------------------------------------------------------
 insert into public.access_passwords (role, password, holder_name)
 values ('أدمن', '12345', 'المدير');
