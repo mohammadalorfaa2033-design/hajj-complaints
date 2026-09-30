@@ -77,6 +77,7 @@
                 Babel من الصفحة — لم يعد الجوال يحوّل الكود عند كل فتح. التعديلات القادمة تُسجَّل في src/app.jsx.
     2026-09-30  تنسيقات الشاشة الرئيسية للأدمن (.tile / .home-tiles / .section-bar).
     2026-09-30  تنسيقات خطوات نموذج الشكوى (.steps / .step-buttons).
+    2026-09-30  لون حالة «مغلقة بعد الاعتراض» (.st-closedobj).
     2026-09-30  تنسيقات القرارات الإدارية (.adv-search / .dec-tag).
     2026-09-30  ألوان حالتي الاعتراض (.st-objreview / .st-objfollow)، وحقل العرض ومربع النتيجة وعلامة «بعد الاعتراض».
     2026-09-30  اعتماد لوحة ألوان الهوية: النصوص #333132 و#939598، العناوين والأزرار #00594f و#006e5c و#279e91،
@@ -202,6 +203,7 @@
   .st-objreview { --st: #b8336a; --st-soft: #fcebf2; }   /* قيد مراجعة الاعتراض: وردي داكن */
   .st-objfollow { --st: #8a6d1f; --st-soft: #f7f0dc; }   /* جاري متابعة الاعتراض: ذهبي داكن */
   .st-closed { --st: #006e5c; --st-soft: #e4f2ef; }
+  .st-closedobj { --st: #00594f; --st-soft: #d4ece8; }  /* مغلقة بعد الاعتراض: أخضر أغمق */
 
   /* شارة الحالة بلونها */
   .badge { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 13px; font-weight: 700; white-space: nowrap; background: var(--st-soft, #eee9df); color: var(--st, #555556); border: 1px solid var(--st, transparent); }
@@ -527,6 +529,6 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4"></script>
 
 <!-- كود التطبيق جاهزاً (مولَّد من src/app.jsx بالأمر python build.py) -->
-<script src="app.js?v=60de75bf30"></script>
+<script src="app.js?v=1865de3a19"></script>
 </body>
 </html>

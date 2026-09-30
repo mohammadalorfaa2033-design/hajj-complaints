@@ -26,6 +26,7 @@
 //    - لا تشارك هذا المشروع: فيه مفتاح الأرشفة. والمجلد فيه أسماء وأرقام هواتف: شاركه مع أشخاص محددين فقط.
 //  سجل التعديلات:
 //    2026-09-30  الإصدار الأول.
+//    2026-09-30  قرار الإغلاق والملف الكامل يشملان حالة «مغلقة بعد الاعتراض».
 // =======================================================================
 
 // الإعدادات: عنوان المشروع ومفتاحه العام (نفس config.js)، ومفتاح الأرشفة الخاص، واسم مجلد الأرشيف
@@ -42,6 +43,7 @@ const CONFIG = {
 const SUB = { main: "01 الشكوى الرئيسية", refs: "02 الإحالات", docs: "03 الوثائق", sessions: "04 الجلسات", closing: "05 قرار الإغلاق" };
 const MARK = "AUTO-ARCHIVE";
 const CLOSED = "مغلقة";
+const isClosed = s => s === CLOSED || s === "مغلقة بعد الاعتراض";   // الإغلاق قبل الاعتراض أو بعده
 
 // =====================================================================
 // التشغيل
@@ -197,7 +199,7 @@ function archiveComplaint(seasonFolder, folder, c, sess, refs, logo) {
 
   // قرار الإغلاق (للشكوى المغلقة فقط)
   clearGenerated(sub.closing);
-  if (c.status === CLOSED) savePdf(sub.closing, "قرار الإغلاق " + c.complaint_number, page(logo, "قرار إغلاق الشكوى " + c.complaint_number, closingBlock(c)));
+  if (isClosed(c.status)) savePdf(sub.closing, "قرار الإغلاق " + c.complaint_number, page(logo, "قرار إغلاق الشكوى " + c.complaint_number, closingBlock(c)));
 
   // الملف الكامل في مجلد الشكوى نفسه
   clearGenerated(folder);
@@ -328,7 +330,7 @@ function fullBlock(c, sess, refs) {
   } else {
     html += "<h2>ثالثاً: النتيجة</h2>" + box(c.result);
   }
-  if (c.status === CLOSED) html += "<h2>الإغلاق</h2>" + kv([["تاريخ الإغلاق", fmtDay(c.closed_date)]]);
+  if (isClosed(c.status)) html += "<h2>الإغلاق</h2>" + kv([["تاريخ الإغلاق", fmtDay(c.closed_date)]]);
   return html;
 }
 

@@ -63,6 +63,7 @@
 --    2026-09-30  القسم 26: تسلسل الشكوى — حالتا «قيد مراجعة الاعتراض» و«جاري متابعة الاعتراض»، الحالة والنتيجة من
 --                آخر جلسة فقط، رمز الاعتراض بعد الإغلاق فقط، المعترض يرى العنوان فقط، ومنع الجلسات على المغلقة.
 --    2026-09-30  القسم 27: القرارات الإدارية (جدول decisions ودوال العرض والحفظ والحذف) وقائمة «تصنيفات القرارات».
+--    2026-09-30  القسم 28: حالة «مغلقة بعد الاعتراض» (جلسة الإغلاق بعد الاعتراض) وتحويل الشكاوى الموجودة إليها.
 -- =====================================================================
 
 -- ---------------------------------------------------------------------
@@ -2869,7 +2870,116 @@ grant execute on function public.admin_save_decision(text, uuid, text, date, tex
 grant execute on function public.admin_delete_decision(text, uuid)                                    to anon, authenticated;
 
 -- ---------------------------------------------------------------------
--- 28) كلمة مرور الأدمن الأولى — غيّر 'غيّرني-123' قبل التنفيذ (6 أحرف على الأقل)
+-- 28) حالة «مغلقة بعد الاعتراض»: الإغلاق النهائي بعد الاعتراض حالة مستقلة
+--     جلسة إغلاق بعد وقت الاعتراض ← «مغلقة بعد الاعتراض» (وقبله ← «مغلقة»)
+--     يحتاج القسمين 24 و26 قبله؛ ويُنفَّذ وحده كتحديث لقاعدة موجودة (لا يحذف بيانات)
+-- ---------------------------------------------------------------------
+-- الحالة السابعة في الشكوى والجلسة
+alter table public.complaints drop constraint if exists complaints_status_check;
+alter table public.complaints add constraint complaints_status_check
+  check (status in ('جديد', 'قيد المراجعة', 'جاري المتابعة', 'قيد مراجعة الاعتراض', 'جاري متابعة الاعتراض', 'مغلقة', 'مغلقة بعد الاعتراض'));
+alter table public.sessions drop constraint if exists sessions_status_check;
+alter table public.sessions add constraint sessions_status_check
+  check (status in ('جديد', 'قيد المراجعة', 'جاري المتابعة', 'قيد مراجعة الاعتراض', 'جاري متابعة الاعتراض', 'مغلقة', 'مغلقة بعد الاعتراض'));
+
+-- عند تعديل شكوى: الحالتان المغلقتان تحملان تاريخ إغلاق، وغيرهما بلا تاريخ
+create or replace function public.complaints_before_update()
+returns trigger language plpgsql as $$
+begin
+  new.complaint_number := old.complaint_number;
+  new.tracking_code    := old.tracking_code;
+  new.updated_at       := now();
+  if new.status in ('مغلقة', 'مغلقة بعد الاعتراض') then
+    new.closed_date := coalesce(new.closed_date, now());
+  else
+    new.closed_date := null;
+  end if;
+  return new;
+end $$;
+
+-- قبل حفظ جلسة: حالتها حسب وقتها بالنسبة للاعتراض (متابعة أو إغلاق، قبل الاعتراض أو بعده)
+create or replace function public.sessions_before_write()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare
+  v_obj   timestamptz;
+  v_after boolean;
+begin
+  select objection_at into v_obj from public.complaints where id = new.complaint_id;
+  v_after := v_obj is not null and new.session_at >= v_obj;
+  if new.status in ('مغلقة', 'مغلقة بعد الاعتراض') then
+    new.status := case when v_after then 'مغلقة بعد الاعتراض' else 'مغلقة' end;
+  else
+    new.status := case when v_after then 'جاري متابعة الاعتراض' else 'جاري المتابعة' end;
+  end if;
+  return new;
+end $$;
+
+-- بعد إضافة جلسة: إن كانت الأحدث تُرحَّل حالتها ونتيجتها والمحال إليه إلى الشكوى
+create or replace function public.sessions_after_insert()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if exists (select 1 from public.sessions s
+             where s.complaint_id = new.complaint_id and s.session_at > new.session_at and s.id <> new.id) then
+    return new;
+  end if;
+  update public.complaints set
+    status      = new.status,
+    referred_to = coalesce(nullif(btrim(new.referred_to), ''), referred_to),
+    result      = coalesce(nullif(btrim(new.result), ''), result),
+    closed_date = case when new.status in ('مغلقة', 'مغلقة بعد الاعتراض') then new.session_at end
+  where id = new.complaint_id;
+  return new;
+end $$;
+
+-- بعد تعديل جلسة: إن كانت الأحدث تُرحَّل قيمها إلى الشكوى
+create or replace function public.sessions_after_update()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if exists (select 1 from public.sessions s
+             where s.complaint_id = new.complaint_id and s.session_at > new.session_at and s.id <> new.id) then
+    return null;
+  end if;
+  update public.complaints set
+    status      = new.status,
+    referred_to = coalesce(nullif(btrim(new.referred_to), ''), referred_to),
+    result      = coalesce(nullif(btrim(new.result), ''), result),
+    closed_date = case when new.status in ('مغلقة', 'مغلقة بعد الاعتراض') then new.session_at end
+  where id = new.complaint_id;
+  return null;
+end $$;
+
+-- إضافة جلسة: ممنوعة للشكوى المغلقة (قبل الاعتراض أو بعده)
+create or replace function public.admin_add_session(
+  p_secret text, p_complaint_id uuid, p_session_at timestamptz,
+  p_title text, p_topic text, p_referred_to text, p_result text, p_status text
+) returns setof public.complaints
+language plpgsql security definer set search_path = public as $$
+begin
+  if public.verify_password('أدمن', p_secret) is null then
+    return;
+  end if;
+  if exists (select 1 from public.complaints where id = p_complaint_id and status in ('مغلقة', 'مغلقة بعد الاعتراض')) then
+    raise exception 'الشكوى مغلقة: يمكن تعديل جلساتها فقط';
+  end if;
+  insert into public.sessions (complaint_id, session_at, title, topic, referred_to, result, status)
+  values (p_complaint_id, coalesce(p_session_at, now()),
+          nullif(btrim(left(p_title, 200)), ''), nullif(btrim(left(p_topic, 2000)), ''),
+          nullif(btrim(left(p_referred_to, 200)), ''), nullif(btrim(left(p_result, 2000)), ''), p_status);
+  return query select * from public.complaints where id = p_complaint_id;
+end $$;
+
+-- مرة واحدة: الشكاوى والجلسات المغلقة بعد اعتراض ← «مغلقة بعد الاعتراض» (المشغّلات موقوفة)
+alter table public.complaints disable trigger user;
+alter table public.sessions disable trigger user;
+update public.complaints set status = 'مغلقة بعد الاعتراض' where status = 'مغلقة' and objection_at is not null;
+update public.sessions s set status = 'مغلقة بعد الاعتراض'
+  from public.complaints c
+ where c.id = s.complaint_id and s.status = 'مغلقة' and c.objection_at is not null and s.session_at >= c.objection_at;
+alter table public.sessions enable trigger user;
+alter table public.complaints enable trigger user;
+
+-- ---------------------------------------------------------------------
+-- 29) كلمة مرور الأدمن الأولى — غيّر 'غيّرني-123' قبل التنفيذ (6 أحرف على الأقل)
 -- ---------------------------------------------------------------------
 insert into public.access_passwords (role, password, holder_name)
 values ('أدمن', 'غيّرني-123', 'المدير');

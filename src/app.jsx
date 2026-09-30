@@ -20,6 +20,8 @@
 //                لا جلسات جديدة للمغلقة، «إغلاق عبر جلسة» في مربع «المطلوب»، وأزرار الجلسات والاعتراض بالأخضر.
 //    2026-09-30  قسم «📑 القرارات الإدارية»: رقم القرار وتاريخه وعنوانه وموضوعه ورابطه وتصنيفه، بحث متقدم (حقل، تصنيف،
 //                فترة، ترتيب)، شرائح التصنيفات بأعدادها، فرز بالعناوين، تفاصيل القرار، وتصدير Excel؛ الإضافة للمدير.
+//    2026-09-30  حالة «مغلقة بعد الاعتراض» (جلسة إغلاق بعد الاعتراض)، ونص المشتكي إلزامي في جلسة الإغلاق (ونص المعترض
+//                اختياري بعد الاعتراض) ويُحفظ مع الشكوى.
 // =======================================================================
 // استيراد خطافات React المستخدمة في المكونات
 const { useState, useEffect, useCallback } = React;
@@ -37,11 +39,13 @@ const DECISION_CLASSES = ["تنظيمي", "إداري", "مالي", "تأديب�
 const replaceList = (list, items) => { if (Array.isArray(items) && items.length) list.splice(0, list.length, ...items); };
 
 // حالات الشكوى (تطابق القيد في schema.sql) واسم لاتيني لكل حالة لاستخدامه في الألوان
-const STATUSES = ["جديد", "قيد المراجعة", "جاري المتابعة", "قيد مراجعة الاعتراض", "جاري متابعة الاعتراض", "مغلقة"];
+const STATUSES = ["جديد", "قيد المراجعة", "جاري المتابعة", "قيد مراجعة الاعتراض", "جاري متابعة الاعتراض", "مغلقة", "مغلقة بعد الاعتراض"];
 const ST_KEY = { "جديد": "new", "قيد المراجعة": "review", "جاري المتابعة": "follow",
-                 "قيد مراجعة الاعتراض": "objreview", "جاري متابعة الاعتراض": "objfollow", "مغلقة": "closed" };
+                 "قيد مراجعة الاعتراض": "objreview", "جاري متابعة الاعتراض": "objfollow", "مغلقة": "closed", "مغلقة بعد الاعتراض": "closedobj" };
 const stClass = s => `st-${ST_KEY[s] || "new"}`;
 const CLOSED = "مغلقة";
+const CLOSED_OBJ = "مغلقة بعد الاعتراض";                       // الإغلاق النهائي بعد الاعتراض
+const isClosed = s => s === CLOSED || s === CLOSED_OBJ;         // هل الحالة مغلقة (قبل الاعتراض أو بعده)؟
 
 // اتصال Supabase بالمفتاح العام فقط (لا توجد حسابات مستخدمين)
 const sb = isConfigured
@@ -789,7 +793,7 @@ function smartAlerts(c, ref = new Date()) {
   // اعتراض المشتكى عليه لم يُراجع بعد (لم تُحفظ الشكوى بعد وصوله) — يظهر حتى لو كانت مغلقة
   const objection = c.objection_at && new Date(c.updated_at || 0) - new Date(c.objection_at) < 5000
     ? [{ level: "warn", text: `⚖️ وصل اعتراض من المشتكى عليه (${fmtDateTime(c.objection_at)}) — افتح الشكوى لمراجعته` }] : [];
-  if (c.status === CLOSED) return objection;
+  if (isClosed(c.status)) return objection;
   const now = ref.getTime();
   const age = now - new Date(c.received_date);                     // عمر الشكوى
   const idle = now - new Date(c.updated_at || c.received_date);   // منذ آخر تعديل
@@ -967,7 +971,7 @@ function AdminHome({ me, isManager, rows, go }) {
   const list = rows || [];
   const due = list.filter(c => dueAlerts(c).length > 0).length;
   const fresh = list.filter(c => c.status === "جديد").length;
-  const open = list.filter(c => c.status !== CLOSED).length;
+  const open = list.filter(c => !isClosed(c.status)).length;
 
   // زر كبير: أيقونة، عنوان، وعدد (اختياري) بلون
   const Tile = ({ icon, title, count, tone, onClick, sub }) => (
@@ -1890,11 +1894,11 @@ function ComplaintCard({ secret, complaint: c, onSaved, onSessionsChanged, fromD
   // بعد إضافة جلسة أو تعديلها: تحديث الشكوى في القائمة والإحالة المعروضة (الإغلاق يمسح التنبيه اليدوي)
   function applyFromSession(u) {
     onSaved(u);
-    setV(x => ({ ...x, referred_to: u.referred_to || "" }));
+    setV(x => ({ ...x, referred_to: u.referred_to || "", complainant_result: u.complainant_result || "", accused_result: u.accused_result || "" }));
   }
 
   // هل أُغلقت نهائياً بعد الاعتراض؟ (تُقفل ولا يبقى إلا تعديل الجلسات)
-  const finalClosed = c.status === CLOSED && !!c.objection_at;
+  const finalClosed = c.status === CLOSED_OBJ;
 
   // التنبيهات الذكية للشكوى كما هي محفوظة
   const alerts = smartAlerts(c);
@@ -1923,7 +1927,7 @@ function ComplaintCard({ secret, complaint: c, onSaved, onSessionsChanged, fromD
       {c.title && <div className="c-title">📝 {c.title}</div>}
       <div className="subject">{c.subject}</div>
       {msg && <Alert type={msg.type}>{msg.text}</Alert>}
-      {fromDue && c.status !== CLOSED && (
+      {fromDue && !isClosed(c.status) && (
         <div className="due-prompt">
           <b>⏰ حدّد موعد التنبيه القادم والمطلوب عنده</b>
           <small className="muted" style={{ display: "block", marginBottom: 10 }}>حتى تعود هذه الشكوى إلى «المطلوب» في موعدها ولا تُنسى. وإن انتهت متابعتها فأغلقها بجلسة إغلاق.</small>
@@ -2135,12 +2139,15 @@ function ObjectionSection({ secret, complaint: c, onSaved }) {
 // قيم أحدث جلسة تُرحَّل إلى الشكوى، والنتيجة إلى «نتيجة الشكوى» الداخلية فقط
 // حالات الجلسة: «جاري المتابعة» (أو «جاري متابعة الاعتراض» للجلسة بعد الاعتراض)، أو إغلاق الشكوى
 const sessionStatuses = (complaint, at) =>
-  [complaint.objection_at && (!at || new Date(at) >= new Date(complaint.objection_at)) ? "جاري متابعة الاعتراض" : "جاري المتابعة", CLOSED];
-const sessionStatus = (complaint, s, at) => s === CLOSED ? CLOSED : sessionStatuses(complaint, at)[0];
+  complaint.objection_at && (!at || new Date(at) >= new Date(complaint.objection_at))
+    ? ["جاري متابعة الاعتراض", CLOSED_OBJ] : ["جاري المتابعة", CLOSED];
+const sessionStatus = (complaint, s, at) => sessionStatuses(complaint, at)[isClosed(s) ? 1 : 0];
 
 function SessionsSection({ secret, complaint, onApplied, onChanged, closeReq = 0 }) {
   // سجل الجلسات، النموذج (جلسة جديدة أو تعديل جلسة: editId)، والرسائل
-  const blank = () => ({ at: toDateTimeInput(new Date()), title: "", topic: "", referred_to: complaint.referred_to || "", result: "", status: sessionStatus(complaint, complaint.status) });
+  const blank = () => ({ at: toDateTimeInput(new Date()), title: "", topic: "", referred_to: complaint.referred_to || "", result: "",
+                         status: sessionStatus(complaint, complaint.status),
+                         cresult: complaint.complainant_result || "", aresult: complaint.accused_result || "" });
   const [list, setList] = useState(null);
   const [form, setForm] = useState(blank);
   const [editId, setEditId] = useState(null);
@@ -2159,7 +2166,9 @@ function SessionsSection({ secret, complaint, onApplied, onChanged, closeReq = 0
   // بدء تعديل جلسة: تعبئة النموذج بقيمها
   function startEdit(s) {
     setEditId(s.id);
-    setForm({ at: toDateTimeInput(s.session_at), title: s.title || "", topic: s.topic || "", referred_to: s.referred_to || "", result: s.result || "", status: sessionStatus(complaint, s.status, s.session_at) });
+    setForm({ at: toDateTimeInput(s.session_at), title: s.title || "", topic: s.topic || "", referred_to: s.referred_to || "", result: s.result || "",
+              status: sessionStatus(complaint, s.status, s.session_at),
+              cresult: complaint.complainant_result || "", aresult: complaint.accused_result || "" });
     setMsg(null);
   }
 
@@ -2167,12 +2176,12 @@ function SessionsSection({ secret, complaint, onApplied, onChanged, closeReq = 0
   const formRef = React.useRef(null);
   useEffect(() => {
     if (!closeReq) return;
-    setEditId(null); setForm(f => ({ ...blank(), title: f.title, topic: f.topic, result: f.result, status: CLOSED }));
+    setEditId(null); setForm(f => ({ ...blank(), title: f.title, topic: f.topic, result: f.result, status: sessionStatuses(complaint)[1] }));
     setTimeout(() => formRef.current && formRef.current.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
   }, [closeReq]);
 
   // الشكوى المغلقة: لا جلسات جديدة (إلا بعد اعتراض)، والتعديل متاح
-  const closed = complaint.status === CLOSED;
+  const closed = isClosed(complaint.status);
 
   // إلغاء التعديل والعودة لنموذج جلسة جديدة
   function cancelEdit() { setEditId(null); setForm(blank()); setMsg(null); }
@@ -2181,6 +2190,8 @@ function SessionsSection({ secret, complaint, onApplied, onChanged, closeReq = 0
   async function submit(e) {
     e.preventDefault();
     if (!form.at) return setMsg({ type: "error", text: "حدّد تاريخ ووقت الجلسة." });
+    const closing = isClosed(form.status);
+    if (closing && !form.cresult.trim()) return setMsg({ type: "error", text: "اكتب النص الذي يظهر للمشتكي في صفحة «نتيجة الشكوى» قبل الإغلاق." });
     setBusy(true); setMsg(null);
     const args = { p_secret: secret, p_session_at: dateTimeInputToIso(form.at), p_title: form.title, p_topic: form.topic,
                    p_referred_to: form.referred_to, p_result: form.result, p_status: form.status };
@@ -2190,7 +2201,17 @@ function SessionsSection({ secret, complaint, onApplied, onChanged, closeReq = 0
     setBusy(false);
     if (error && /مغلقة/.test(error.message || "")) return setMsg({ type: "error", text: "الشكوى مغلقة: يمكن تعديل جلساتها فقط." });
     if (error || !data || !data.length) return setMsg({ type: "error", text: editId ? "تعذّر تعديل الجلسة، يرجى المحاولة مرة أخرى." : "تعذّر إضافة الجلسة، يرجى المحاولة مرة أخرى." });
-    onApplied(data[0]);
+    // عند الإغلاق: حفظ ما يراه المشتكي (والمعترض) في الشكوى، والتنبيه اليدوي يُلغى
+    let u = data[0];
+    if (closing) {
+      const r2 = await sb.rpc("admin_update_complaint", {
+        p_secret: secret, p_id: u.id, p_classification: u.classification, p_referred_to: u.referred_to, p_status: u.status,
+        p_result: u.result, p_complainant_result: form.cresult, p_accused_result: complaint.objection_at ? form.aresult : u.accused_result,
+        p_closed_date: u.closed_date, p_reminder_at: null, p_reminder_note: null,
+      });
+      if (r2.data && r2.data.length) u = r2.data[0];
+    }
+    onApplied(u);
     setMsg({ type: "ok", text: editId ? "تم تعديل الجلسة." : "تمت إضافة الجلسة، ورُحِّل المحال إليه ونتيجة الجلسة والحالة إلى الشكوى (إن كانت أحدث جلسة)." });
     setEditId(null); setForm(blank());
     load(); onChanged();
@@ -2235,6 +2256,16 @@ function SessionsSection({ secret, complaint, onApplied, onChanged, closeReq = 0
           </Field>
           <Field label="موضوع الجلسة" full><textarea style={{ minHeight: 60 }} value={form.topic} onChange={set("topic")} maxLength={2000} placeholder="ما الذي نوقش في الجلسة" /></Field>
           <Field label="نتيجة الجلسة" full><textarea style={{ minHeight: 70 }} value={form.result} onChange={set("result")} maxLength={2000} /></Field>
+          {isClosed(form.status) && (
+            <Field label="📩 النص الذي يظهر للمشتكي في نتيجة الشكوى" required hint="يراه المشتكي برقم الشكوى ورمز المتابعة" full>
+              <textarea style={{ minHeight: 70 }} value={form.cresult} onChange={set("cresult")} maxLength={2000} />
+            </Field>
+          )}
+          {isClosed(form.status) && complaint.objection_at && (
+            <Field label="⚖️ النص الذي يظهر للمعترض" hint="اختياري — يراه المشتكى عليه في صفحة الاعتراض" full>
+              <textarea style={{ minHeight: 60 }} value={form.aresult} onChange={set("aresult")} maxLength={2000} />
+            </Field>
+          )}
         </div>
         {editId ? (
           <div className="grid" style={{ gridTemplateColumns: "1fr 1fr", marginTop: 12 }}>
@@ -3024,7 +3055,7 @@ function ReportsPage({ code, viewerName }) {
 
   // الأعداد: الإجمالي، المغلقة، والمفتوحة (كل ما لم يُغلق)
   const total = rows ? rows.length : 0;
-  const closed = rows ? rows.filter(r => r.status === CLOSED).length : 0;
+  const closed = rows ? rows.filter(r => isClosed(r.status)).length : 0;
 
   // العرض: الفلتر، بطاقات الأعداد، ثم الجدول (يتحول لبطاقات على الجوال)
   return (
