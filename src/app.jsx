@@ -26,6 +26,8 @@
 //                (بديل الأرشفة على Google Drive التي أُلغيت).
 //    2026-09-30  ملف Word: الترويسة الرسمية (letterhead.jpg) في رأس كل صفحة بدل الشعار والنص.
 //    2026-09-30  قسم «📘 دليل المنصة» في الرئيسية للمدير والموظف (تقرير المنصة داخل اللوحة، مع تسلسل الحالات بألوانها).
+//    2026-09-30  قائمة جانبية بدل أزرار الرئيسية (ثابتة على الحاسوب، منزلقة من اليمين على الجوال) بأعداد المطلوب
+//                والجديدة؛ الرئيسية صارت ترحيباً وبحثاً وبطاقات ملخص؛ «إرسال رابط» للمدير فقط.
 // =======================================================================
 // استيراد خطافات React المستخدمة في المكونات
 const { useState, useEffect, useCallback } = React;
@@ -959,7 +961,7 @@ const SECTIONS = {
   today:      { title: "📅 المطلوب" },
   complaints: { title: "📋 الشكاوى" },
   sessions:   { title: "🗓️ الجلسات" },
-  links:      { title: "🔗 إرسال رابط" },
+  links:      { title: "🔗 إرسال رابط", manager: true },
   decisions:  { title: "📑 القرارات الإدارية" },
   guide:      { title: "📘 دليل المنصة" },
   access:     { title: "🔐 دخول المشتكين", manager: true },
@@ -980,6 +982,7 @@ function AdminPage({ secret }) {
   const [openId, setOpenId] = useState(null);
   const [openFromDue, setOpenFromDue] = useState(false);   // فُتحت من «المطلوب» ← طلب تحديد التنبيه القادم
   const [sessVer, setSessVer] = useState(0);
+  const [menuOpen, setMenuOpen] = useState(false);   // القائمة الجانبية مفتوحة على الجوال
 
   // من الداخل؟ مدير أو موظف (قاعدة لم يُنفَّذ فيها القسم 24 ← مدير كما كان)
   const [me, setMe] = useState(null);
@@ -1043,32 +1046,36 @@ function AdminPage({ secret }) {
   const section = SECTIONS[tab];
   const allowed = tab === "home" || (section && (isManager || !section.manager));
 
-  // العرض: الرئيسية أو القسم المفتوح (مع شريط العودة)، ونافذة التفاصيل عند فتح شكوى
+  // الأعداد على عناصر القائمة: المطلوب اليوم، والشكاوى الجديدة
+  const counts = { today: (rows || []).filter(c => dueAlerts(c).length > 0).length, complaints: (rows || []).filter(c => c.status === "جديد").length };
+  const current = allowed ? tab : "home";
+  const pick = key => { setMenuOpen(false); if (key === "home") goHome(); else go(key); };
+
+  // العرض: القائمة الجانبية (ثابتة على الحاسوب، منزلقة على الجوال) + الشريط العلوي + المحتوى، ونافذة التفاصيل
   if (!me) return <Loading />;
   return (
-    <div>
-      {error && <Alert type="error">{error}</Alert>}
-      {!allowed || tab === "home" ? (
-        <AdminHome me={me} isManager={isManager} rows={rows} go={go} />
-      ) : (
-        <>
-          <div className="section-bar">
-            <button type="button" className="btn secondary" onClick={goHome}>🏠 الرئيسية</button>
-            <h2>{section.title}</h2>
-          </div>
-          {tab === "today" && <AdminDue secret={secret} rows={rows} onSaved={onSaved} reload={reload} onOpen={c => openComplaint(c, true)} />}
-          {tab === "links" && <AdminLinks secret={secret} isManager={isManager} />}
-          {tab === "decisions" && <AdminDecisions secret={secret} isManager={isManager} />}
-          {tab === "guide" && <AdminGuide isManager={isManager} />}
-          {tab === "complaints" && <AdminComplaints secret={secret} rows={rows} onSaved={onSaved} reload={reload} onOpen={c => openComplaint(c)}
-                                     initialSearch={start.search || ""} initialFilter={start.filter || "الكل"} />}
-          {tab === "sessions" && <AdminSessions secret={secret} version={sessVer} onOpen={c => openComplaint(c)} />}
-          {tab === "access" && <AdminAccess secret={secret} />}
-          {tab === "viewers" && <AdminViewers secret={secret} />}
-          {tab === "staff" && <AdminStaff secret={secret} />}
-          {tab === "settings" && <AdminSettings secret={secret} rows={rows} reload={reload} />}
-        </>
-      )}
+    <div className="admin-shell">
+      {menuOpen && <div className="side-backdrop" onClick={() => setMenuOpen(false)} />}
+      <SideNav me={me} isManager={isManager} current={current} counts={counts} open={menuOpen} onPick={pick} onClose={() => setMenuOpen(false)} />
+      <div className="admin-main">
+        <div className="section-bar">
+          <button type="button" className="btn secondary menu-btn" onClick={() => setMenuOpen(true)} aria-label="فتح القائمة">☰</button>
+          <h2>{current === "home" ? "🏠 الرئيسية" : section.title}</h2>
+        </div>
+        {error && <Alert type="error">{error}</Alert>}
+        {current === "home" && <AdminHome me={me} isManager={isManager} rows={rows} go={go} />}
+        {current === "today" && <AdminDue secret={secret} rows={rows} onSaved={onSaved} reload={reload} onOpen={c => openComplaint(c, true)} />}
+        {current === "links" && <AdminLinks secret={secret} isManager={isManager} />}
+        {current === "decisions" && <AdminDecisions secret={secret} isManager={isManager} />}
+        {current === "guide" && <AdminGuide isManager={isManager} />}
+        {current === "complaints" && <AdminComplaints key={start.search + start.filter} secret={secret} rows={rows} onSaved={onSaved} reload={reload} onOpen={c => openComplaint(c)}
+                                   initialSearch={start.search || ""} initialFilter={start.filter || "الكل"} />}
+        {current === "sessions" && <AdminSessions secret={secret} version={sessVer} onOpen={c => openComplaint(c)} />}
+        {current === "access" && <AdminAccess secret={secret} />}
+        {current === "viewers" && <AdminViewers secret={secret} />}
+        {current === "staff" && <AdminStaff secret={secret} />}
+        {current === "settings" && <AdminSettings secret={secret} rows={rows} reload={reload} />}
+      </div>
       {opened && (
         <div className="modal-back" onClick={() => setOpenId(null)}>
           <div className="modal" onClick={e => e.stopPropagation()}>
@@ -1081,18 +1088,54 @@ function AdminPage({ secret }) {
   );
 }
 
-// الشاشة الرئيسية للأدمن: ترحيب، بحث سريع، وأزرار كبيرة بأعداد واضحة؛ أزرار المدير في قسم منفصل
+// عناصر القائمة الجانبية: المفتاح، الأيقونة، والاسم (الأقسام العامة، ثم أقسام المدير)
+const NAV_MAIN = [["home", "🏠", "الرئيسية"], ["today", "📅", "المطلوب اليوم"], ["complaints", "📋", "الشكاوى"],
+                  ["sessions", "🗓️", "الجلسات"], ["decisions", "📑", "القرارات الإدارية"], ["guide", "📘", "دليل المنصة"]];
+const NAV_MANAGER = [["links", "🔗", "إرسال رابط"], ["access", "🔐", "دخول المشتكين"], ["viewers", "📊", "كلمات مرور الإدارة"],
+                     ["staff", "👥", "الموظفون"], ["settings", "⚙️", "الإعدادات"]];
+
+// القائمة الجانبية: الشعار واسم المستخدم ودوره، ثم الأقسام بأعدادها؛ على الجوال تنزلق من اليمين
+function SideNav({ me, isManager, current, counts, open, onPick, onClose }) {
+  // عنصر واحد: أيقونة، اسم، وعدد (إن وُجد)
+  const item = ([key, icon, label]) => (
+    <button key={key} type="button" className={`side-item ${current === key ? "active" : ""}`} onClick={() => onPick(key)}
+      aria-current={current === key ? "page" : undefined}>
+      <span className="side-icon">{icon}</span>
+      <span className="side-label">{label}</span>
+      {counts[key] > 0 && <span className={`side-count ${key === "today" ? "hot" : ""}`}>{counts[key]}</span>}
+    </button>
+  );
+  return (
+    <aside className={`side ${open ? "open" : ""}`} aria-label="أقسام لوحة الإدارة">
+      <div className="side-head">
+        <Logo size={42} />
+        <div className="side-who"><b>{me.name || (isManager ? "المدير" : "الموظف")}</b><small>{isManager ? "مدير" : "موظف"} · قسم الشكاوى</small></div>
+        <button type="button" className="side-close" onClick={onClose} aria-label="إغلاق القائمة">✕</button>
+      </div>
+      <nav className="side-nav">{NAV_MAIN.map(item)}</nav>
+      {isManager && (
+        <>
+          <div className="side-group">للمدير</div>
+          <nav className="side-nav">{NAV_MANAGER.map(item)}</nav>
+        </>
+      )}
+    </aside>
+  );
+}
+
+// الرئيسية: ترحيب، بحث سريع، وبطاقات ملخص بأعداد (كل بطاقة تفتح قسمها)
 function AdminHome({ me, isManager, rows, go }) {
   // نص البحث السريع
   const [q, setQ] = useState("");
 
-  // الأعداد: المطلوب اليوم، الجديدة، والمفتوحة (كل ما لم يُغلق)
+  // الأعداد: المطلوب اليوم، الجديدة، المفتوحة، والمغلقة
   const list = rows || [];
   const due = list.filter(c => dueAlerts(c).length > 0).length;
   const fresh = list.filter(c => c.status === "جديد").length;
   const open = list.filter(c => !isClosed(c.status)).length;
+  const closed = list.length - open;
 
-  // زر كبير: أيقونة، عنوان، وعدد (اختياري) بلون
+  // بطاقة ملخص: أيقونة، عنوان، وعدد بلون
   const Tile = ({ icon, title, count, tone, onClick, sub }) => (
     <button type="button" className={`tile ${tone || ""}`} onClick={onClick}>
       <span className="tile-icon">{icon}</span>
@@ -1102,7 +1145,7 @@ function AdminHome({ me, isManager, rows, go }) {
     </button>
   );
 
-  // العرض: الترحيب، البحث، الأزرار الأساسية، ثم أزرار المدير
+  // العرض: الترحيب، البحث، ثم البطاقات
   return (
     <div>
       <div className="home-hello">أهلاً{me.name ? ` ${me.name}` : ""} 👋 <span className="muted">· {isManager ? "مدير" : "موظف"}</span></div>
@@ -1112,24 +1155,11 @@ function AdminHome({ me, isManager, rows, go }) {
       </form>
       <div className="home-tiles">
         <Tile icon="📅" title="المطلوب اليوم" count={due} tone={due > 0 ? "hot" : "ok"} onClick={() => go("today")} sub={due > 0 ? "اضغط للمتابعة" : "لا شيء متأخر"} />
-        <Tile icon="🆕" title="شكاوى جديدة" count={fresh} tone={fresh > 0 ? "warm" : ""} onClick={() => go("complaints", { filter: "جديد" })} />
-        <Tile icon="📋" title="كل الشكاوى" count={open} sub="مفتوحة" onClick={() => go("complaints")} />
-        <Tile icon="🗓️" title="الجلسات" onClick={() => go("sessions")} />
-        <Tile icon="🔗" title="إرسال رابط" sub="لمشتكٍ أو للإدارة" onClick={() => go("links")} />
-        <Tile icon="📑" title="القرارات الإدارية" sub="بحث وروابط" onClick={() => go("decisions")} />
-        <Tile icon="📘" title="دليل المنصة" sub="كيف تعمل المنصة" onClick={() => go("guide")} />
+        <Tile icon="🆕" title="شكاوى جديدة" count={fresh} tone={fresh > 0 ? "warm" : ""} onClick={() => go("complaints", { filter: "جديد" })} sub="لم تُفتح بعد" />
+        <Tile icon="📂" title="مفتوحة" count={open} onClick={() => go("complaints")} sub="قيد العمل" />
+        <Tile icon="✅" title="مغلقة" count={closed} tone="ok" onClick={() => go("complaints")} sub="هذا الموسم وما قبله" />
       </div>
-      {isManager && (
-        <>
-          <div className="home-label">للمدير</div>
-          <div className="home-tiles small">
-            <Tile icon="🔐" title="دخول المشتكين" onClick={() => go("access")} />
-            <Tile icon="📊" title="كلمات مرور الإدارة" onClick={() => go("viewers")} />
-            <Tile icon="👥" title="الموظفون" onClick={() => go("staff")} />
-            <Tile icon="⚙️" title="الإعدادات" onClick={() => go("settings")} />
-          </div>
-        </>
-      )}
+      <p className="muted home-hint">الأقسام في القائمة الجانبية{" "}<span className="only-phone">— اضغط ☰ في الأعلى لفتحها</span>.</p>
     </div>
   );
 }
