@@ -59,6 +59,7 @@
 --                يعدّلهما الأدمن؛ إلغاء سجل الشكوى وسجل الإحالة (حذف complaint_log)؛ سبب التمديد في الشكوى.
 --    2026-09-30  القسم 24: صلاحيتان «مدير» و«موظف» (admin_whoami، كلمات مرور الموظفين، دوال المدير فقط).
 --    2026-09-30  القسم الأخير: إعادة القيمة المثالية لكلمة مرور الأدمن الأولى (المستودع عام).
+--    2026-09-30  القسم 25: الأرشفة على Drive — جدول الإحالات، «النتيجة قبل الاعتراض»، مفتاح الأرشفة و archive_export.
 -- =====================================================================
 
 -- ---------------------------------------------------------------------
@@ -167,6 +168,11 @@ drop function if exists public.admin_whoami(text);
 drop function if exists public.admin_create_staff(text, text);
 drop function if exists public.admin_list_staff(text);
 drop function if exists public.admin_set_staff_active(text, uuid, boolean);
+drop table if exists public.referrals cascade;
+drop function if exists public.admin_complaint_referrals(text, uuid);
+drop function if exists public.admin_list_referrals(text);
+drop function if exists public.set_archive_key(text);
+drop function if exists public.archive_export(text);
 drop function if exists public.submit_complaint(text, text, text, text, text, text, text, text, text);
 drop function if exists public.admin_add_session(text, uuid, timestamptz, text, text, text, text, text);
 drop function if exists public.admin_update_session(text, uuid, timestamptz, text, text, text, text, text);
@@ -2443,7 +2449,137 @@ grant execute on function public.admin_list_staff(text)                      to 
 grant execute on function public.admin_set_staff_active(text, uuid, boolean) to anon, authenticated;
 
 -- ---------------------------------------------------------------------
--- 25) كلمة مرور الأدمن الأولى — غيّر 'غيّرني-123' قبل التنفيذ (6 أحرف على الأقل)
+-- 25) الأرشفة على Google Drive
+--     - جدول صغير للإحالات: إلى من أُحيلت الشكوى ومتى (فقط؛ بلا تغيّر الحالات)
+--     - «النتيجة قبل الاعتراض»: تُحفظ تلقائياً لحظة وصول الاعتراض (للملف الكامل)
+--     - مفتاح أرشفة خاص + دالة تصدير يقرؤها برنامج الأرشفة (Apps Script) في حساب Google
+--     مفتاح الأرشفة يُعيَّن مرة واحدة من SQL Editor:  select public.set_archive_key('مفتاح-طويل-سري');
+--     يُنفَّذ وحده أيضاً كتحديث لقاعدة موجودة (لا يحذف بيانات)
+-- ---------------------------------------------------------------------
+-- جدول الإحالات: سطر لكل إحالة جديدة
+create table if not exists public.referrals (
+  id           uuid primary key default gen_random_uuid(),
+  complaint_id uuid not null references public.complaints (id) on delete cascade,
+  referred_to  text not null,                         -- الجهة أو الشخص
+  referred_at  timestamptz not null default now()     -- وقت الإحالة
+);
+create index if not exists referrals_complaint_idx on public.referrals (complaint_id, referred_at);
+alter table public.referrals enable row level security;
+revoke all on public.referrals from anon, authenticated;
+
+-- حقل «النتيجة قبل الاعتراض»
+alter table public.complaints add column if not exists result_before_objection text;
+
+-- مرة واحدة: الإحالات السابقة من الجلسات، ثم الإحالة الحالية لكل شكوى إن لم تكن مسجّلة
+insert into public.referrals (complaint_id, referred_to, referred_at)
+  select s.complaint_id, btrim(s.referred_to), min(s.session_at)
+  from public.sessions s
+  where coalesce(btrim(s.referred_to), '') <> ''
+    and not exists (select 1 from public.referrals r where r.complaint_id = s.complaint_id)
+  group by s.complaint_id, btrim(s.referred_to);
+insert into public.referrals (complaint_id, referred_to, referred_at)
+  select c.id, btrim(c.referred_to), coalesce(c.updated_at, c.received_date)
+  from public.complaints c
+  where coalesce(btrim(c.referred_to), '') <> ''
+    and not exists (select 1 from public.referrals r where r.complaint_id = c.id and r.referred_to = btrim(c.referred_to));
+
+-- قبل تعديل شكوى: حفظ النتيجة لحظة وصول الاعتراض
+create or replace function public.complaints_keep_result_before_objection()
+returns trigger language plpgsql as $$
+begin
+  if old.objection_at is null and new.objection_at is not null then
+    new.result_before_objection := old.result;
+  end if;
+  return new;
+end $$;
+drop trigger if exists trg_complaints_keep_result on public.complaints;
+create trigger trg_complaints_keep_result
+  before update on public.complaints
+  for each row execute function public.complaints_keep_result_before_objection();
+
+-- بعد تعديل شكوى: إن تغيّرت الجهة المُحال إليها (وليست فارغة) ← سطر إحالة جديد
+create or replace function public.complaints_log_referral()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if coalesce(btrim(new.referred_to), '') <> '' and new.referred_to is distinct from old.referred_to then
+    insert into public.referrals (complaint_id, referred_to) values (new.id, btrim(new.referred_to));
+  end if;
+  return null;
+end $$;
+drop trigger if exists trg_complaints_log_referral on public.complaints;
+create trigger trg_complaints_log_referral
+  after update on public.complaints
+  for each row execute function public.complaints_log_referral();
+
+-- الأدمن: إحالات شكوى معيّنة (الأقدم أولاً)
+create or replace function public.admin_complaint_referrals(p_secret text, p_id uuid)
+returns table (referred_to text, referred_at timestamptz)
+language plpgsql security definer set search_path = public as $$
+begin
+  if public.verify_password('أدمن', p_secret) is null then
+    return;
+  end if;
+  return query select r.referred_to, r.referred_at from public.referrals r where r.complaint_id = p_id order by r.referred_at;
+end $$;
+
+-- الأدمن: كل الإحالات مع رقم الشكوى (لورقة «الإحالات» في Excel)
+create or replace function public.admin_list_referrals(p_secret text)
+returns table (complaint_number text, referred_to text, referred_at timestamptz)
+language plpgsql security definer set search_path = public as $$
+begin
+  if public.verify_password('أدمن', p_secret) is null then
+    return;
+  end if;
+  return query
+    select c.complaint_number, r.referred_to, r.referred_at
+    from public.referrals r join public.complaints c on c.id = r.complaint_id
+    order by c.complaint_number, r.referred_at;
+end $$;
+
+-- تعيين مفتاح الأرشفة (من SQL Editor فقط؛ يُحفظ مشفّراً، 12 حرفاً على الأقل)
+create or replace function public.set_archive_key(p_key text)
+returns void
+language plpgsql security definer set search_path = public, extensions as $$
+begin
+  if length(coalesce(p_key, '')) < 12 then
+    raise exception 'مفتاح الأرشفة يجب ألا يقل عن 12 حرفاً';
+  end if;
+  insert into public.app_settings (key, value) values ('archive_hash', crypt(p_key, gen_salt('bf')))
+    on conflict (key) do update set value = excluded.value;
+end $$;
+revoke all on function public.set_archive_key(text) from public, anon, authenticated;
+
+-- تصدير الأرشيف لبرنامج Apps Script: كل الشكاوى وجلساتها وإحالاتها (للقراءة فقط، بمفتاح الأرشفة)
+create or replace function public.archive_export(p_key text)
+returns json
+language plpgsql security definer set search_path = public, extensions as $$
+declare
+  v_hash text := public.setting('archive_hash');
+begin
+  if v_hash is null or crypt(coalesce(p_key, ''), v_hash) <> v_hash then
+    return null;
+  end if;
+  return json_build_object(
+    'complaints', coalesce((select json_agg(x order by x.complaint_number) from (
+        select id, season, complaint_number, received_date, status, title, subject,
+               complainant_name, complainant_role, phone_number, contact_number, accused_name, accused_role,
+               classification, referred_to, result, result_before_objection, complainant_result, accused_result,
+               closed_date, objection_summary, objection_deadline, objection_extension_reason, objection_text, objection_at,
+               updated_at
+        from public.complaints) x), '[]'::json),
+    'sessions', coalesce((select json_agg(s order by s.session_at) from (
+        select complaint_id, session_at, title, topic, referred_to, result, status from public.sessions) s), '[]'::json),
+    'referrals', coalesce((select json_agg(r order by r.referred_at) from (
+        select complaint_id, referred_to, referred_at from public.referrals) r), '[]'::json));
+end $$;
+
+-- السماح للموقع (وبرنامج الأرشفة) باستدعاء الدوال الجديدة
+grant execute on function public.admin_complaint_referrals(text, uuid) to anon, authenticated;
+grant execute on function public.admin_list_referrals(text)            to anon, authenticated;
+grant execute on function public.archive_export(text)                  to anon, authenticated;
+
+-- ---------------------------------------------------------------------
+-- 26) كلمة مرور الأدمن الأولى — غيّر 'غيّرني-123' قبل التنفيذ (6 أحرف على الأقل)
 -- ---------------------------------------------------------------------
 insert into public.access_passwords (role, password, holder_name)
 values ('أدمن', 'غيّرني-123', 'المدير');

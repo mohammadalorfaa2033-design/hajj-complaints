@@ -14,6 +14,7 @@
 //    2026-09-30  صفحة الأدمن: شاشة رئيسية بأزرار كبيرة وأعداد وبحث سريع، وكل قسم يُفتح وحده مع زر «🏠 الرئيسية»
 //                (وزر الرجوع في الجوال)؛ صلاحيتان «مدير» و«موظف» (admin_whoami)، وقسم «👥 الموظفون» للمدير.
 //    2026-09-30  نموذج الشكوى على ثلاث خطوات مع شريط تقدم: بياناتك ← المشتكى عليه ← شكواك.
+//    2026-09-30  سطر «الإحالات» في تفاصيل الشكوى، وورقة «الإحالات» في ملف Excel الكامل (جدول الإحالات الصغير).
 // =======================================================================
 // استيراد خطافات React المستخدمة في المكونات
 const { useState, useEffect, useCallback } = React;
@@ -107,13 +108,17 @@ async function saveWorkbook(sheets, filename) {
   XLSX.writeFile(wb, filename);
 }
 
-// تصدير كامل للأدمن: الشكاوى والجلسات — في ملف واحد
+// تصدير كامل للأدمن: الشكاوى والجلسات والإحالات — في ملف واحد
 async function exportAllToExcel(secret, complaints) {
-  const s = await sb.rpc("admin_list_sessions", { p_secret: secret, p_complaint_id: null });
+  const [s, r] = await Promise.all([
+    sb.rpc("admin_list_sessions", { p_secret: secret, p_complaint_id: null }),
+    sb.rpc("admin_list_referrals", { p_secret: secret }),
+  ]);
   if (s.error) throw new Error(NET_ERR);
   // الجلسات: فقط ما يخص الشكاوى المصدَّرة (الموسم المختار)
   const nums = new Set(complaints.map(c => c.complaint_number));
   const sess = (s.data || []).filter(x => nums.has(x.complaint_number));
+  const refs = (r.data || []).filter(x => nums.has(x.complaint_number));   // فارغة إن لم يُنفَّذ القسم 25
   await saveWorkbook([
     { name: "الشكاوى",
       headers: ["الموسم", "رقم الشكوى", "تاريخ الشكوى", "الحالة", "عنوان الاعتراض", "المشتكي", "صفة المشتكي", "رقم الهاتف", "واتس / تلغرام", "المشتكى عليه", "صفة المشتكى عليه",
@@ -127,6 +132,9 @@ async function exportAllToExcel(secret, complaints) {
     { name: "الجلسات",
       headers: ["رقم الشكوى", "المشتكي", "تاريخ ووقت الجلسة", "عنوان الجلسة", "موضوع الجلسة", "مُحالة إلى", "نتيجة الجلسة", "حالة الشكوى"],
       rows: sess.map(x => [x.complaint_number, x.complainant_name, xlDate(x.session_at), x.title, x.topic, x.referred_to, x.result, x.status]) },
+    { name: "الإحالات",
+      headers: ["رقم الشكوى", "تاريخ الإحالة", "مُحالة إلى"],
+      rows: refs.map(x => [x.complaint_number, xlDate(x.referred_at), x.referred_to]) },
   ], `قسم-الشكاوى-${toDateInput(new Date())}.xlsx`);
 }
 
@@ -1985,9 +1993,26 @@ function ComplaintCard({ secret, complaint: c, onSaved, onSessionsChanged, fromD
           <textarea style={{ minHeight: 70 }} value={v.accused_result} onChange={set("accused_result")} maxLength={2000} />
         </Field>
       </div>
+      <ReferralsLine secret={secret} id={c.id} version={c.updated_at} />
       <button className="btn block" style={{ marginTop: 14 }} disabled={busy} onClick={() => save()}>{busy ? "جارٍ الحفظ…" : "حفظ"}</button>
       <ObjectionSection secret={secret} complaint={c} onSaved={onSaved} />
       <SessionsSection secret={secret} complaint={c} onApplied={applyFromSession} onChanged={() => (onSessionsChanged || (() => {}))()} />
+    </div>
+  );
+}
+
+// سطر «الإحالات السابقة» في تفاصيل الشكوى: إلى من أُحيلت ومتى (من جدول الإحالات الصغير)
+function ReferralsLine({ secret, id, version }) {
+  // الإحالات (لا شيء يظهر إن لم توجد، أو إن لم يُنفَّذ القسم 25 بعد)
+  const [list, setList] = useState([]);
+  useEffect(() => {
+    sb.rpc("admin_complaint_referrals", { p_secret: secret, p_id: id }).then(({ data }) => setList(data || []));
+  }, [secret, id, version]);
+  if (!list.length) return null;
+  return (
+    <div className="ref-line">
+      <b>↗️ الإحالات:</b>{" "}
+      {list.map((r, i) => <span key={i}>{i > 0 && " ← "}{r.referred_to} <small className="muted">({fmtDate(r.referred_at)})</small></span>)}
     </div>
   );
 }
