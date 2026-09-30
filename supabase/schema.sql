@@ -64,6 +64,7 @@
 --                آخر جلسة فقط، رمز الاعتراض بعد الإغلاق فقط، المعترض يرى العنوان فقط، ومنع الجلسات على المغلقة.
 --    2026-09-30  القسم 27: القرارات الإدارية (جدول decisions ودوال العرض والحفظ والحذف) وقائمة «تصنيفات القرارات».
 --    2026-09-30  القسم 28: حالة «مغلقة بعد الاعتراض» (جلسة الإغلاق بعد الاعتراض) وتحويل الشكاوى الموجودة إليها.
+--    2026-09-30  القسم 29: إلغاء الأرشفة على Google Drive (حذف archive_export و set_archive_key من القسم 25 ومن القاعدة).
 -- =====================================================================
 
 -- ---------------------------------------------------------------------
@@ -2457,11 +2458,10 @@ grant execute on function public.admin_list_staff(text)                      to 
 grant execute on function public.admin_set_staff_active(text, uuid, boolean) to anon, authenticated;
 
 -- ---------------------------------------------------------------------
--- 25) الأرشفة على Google Drive
+-- 25) الإحالات والنتيجة قبل الاعتراض
 --     - جدول صغير للإحالات: إلى من أُحيلت الشكوى ومتى (فقط؛ بلا تغيّر الحالات)
---     - «النتيجة قبل الاعتراض»: تُحفظ تلقائياً لحظة وصول الاعتراض (للملف الكامل)
---     - مفتاح أرشفة خاص + دالة تصدير يقرؤها برنامج الأرشفة (Apps Script) في حساب Google
---     مفتاح الأرشفة يُعيَّن مرة واحدة من SQL Editor:  select public.set_archive_key('مفتاح-طويل-سري');
+--     - «النتيجة قبل الاعتراض»: تُحفظ تلقائياً لحظة وصول الاعتراض
+--     (كانت معها أرشفة Google Drive، وأُلغيت بطلب الإدارة — انظر القسم 29)
 --     يُنفَّذ وحده أيضاً كتحديث لقاعدة موجودة (لا يحذف بيانات)
 -- ---------------------------------------------------------------------
 -- جدول الإحالات: سطر لكل إحالة جديدة
@@ -2544,47 +2544,9 @@ begin
     order by c.complaint_number, r.referred_at;
 end $$;
 
--- تعيين مفتاح الأرشفة (من SQL Editor فقط؛ يُحفظ مشفّراً، 12 حرفاً على الأقل)
-create or replace function public.set_archive_key(p_key text)
-returns void
-language plpgsql security definer set search_path = public, extensions as $$
-begin
-  if length(coalesce(p_key, '')) < 12 then
-    raise exception 'مفتاح الأرشفة يجب ألا يقل عن 12 حرفاً';
-  end if;
-  insert into public.app_settings (key, value) values ('archive_hash', crypt(p_key, gen_salt('bf')))
-    on conflict (key) do update set value = excluded.value;
-end $$;
-revoke all on function public.set_archive_key(text) from public, anon, authenticated;
-
--- تصدير الأرشيف لبرنامج Apps Script: كل الشكاوى وجلساتها وإحالاتها (للقراءة فقط، بمفتاح الأرشفة)
-create or replace function public.archive_export(p_key text)
-returns json
-language plpgsql security definer set search_path = public, extensions as $$
-declare
-  v_hash text := public.setting('archive_hash');
-begin
-  if v_hash is null or crypt(coalesce(p_key, ''), v_hash) <> v_hash then
-    return null;
-  end if;
-  return json_build_object(
-    'complaints', coalesce((select json_agg(x order by x.complaint_number) from (
-        select id, season, complaint_number, received_date, status, title, subject,
-               complainant_name, complainant_role, phone_number, contact_number, accused_name, accused_role,
-               classification, referred_to, result, result_before_objection, complainant_result, accused_result,
-               closed_date, objection_summary, objection_deadline, objection_extension_reason, objection_text, objection_at,
-               updated_at
-        from public.complaints) x), '[]'::json),
-    'sessions', coalesce((select json_agg(s order by s.session_at) from (
-        select complaint_id, session_at, title, topic, referred_to, result, status from public.sessions) s), '[]'::json),
-    'referrals', coalesce((select json_agg(r order by r.referred_at) from (
-        select complaint_id, referred_to, referred_at from public.referrals) r), '[]'::json));
-end $$;
-
--- السماح للموقع (وبرنامج الأرشفة) باستدعاء الدوال الجديدة
+-- السماح للموقع باستدعاء الدوال الجديدة
 grant execute on function public.admin_complaint_referrals(text, uuid) to anon, authenticated;
 grant execute on function public.admin_list_referrals(text)            to anon, authenticated;
-grant execute on function public.archive_export(text)                  to anon, authenticated;
 
 -- ---------------------------------------------------------------------
 -- 26) تسلسل الشكوى الجديد
@@ -2979,7 +2941,17 @@ alter table public.sessions enable trigger user;
 alter table public.complaints enable trigger user;
 
 -- ---------------------------------------------------------------------
--- 29) كلمة مرور الأدمن الأولى — غيّر 'غيّرني-123' قبل التنفيذ (6 أحرف على الأقل)
+-- 29) إلغاء الأرشفة على Google Drive (بطلب الإدارة)
+--     حذف دالة التصدير ومفتاح الأرشفة؛ جدول الإحالات و«النتيجة قبل الاعتراض» يبقيان للمنصة
+--     يُنفَّذ وحده كتحديث لقاعدة نُفّذ فيها القسم 25 سابقاً (لا يحذف بيانات الشكاوى)
+-- ---------------------------------------------------------------------
+-- حذف دالتي الأرشفة وقيمة المفتاح المحفوظة
+drop function if exists public.archive_export(text);
+drop function if exists public.set_archive_key(text);
+delete from public.app_settings where key = 'archive_hash';
+
+-- ---------------------------------------------------------------------
+-- 30) كلمة مرور الأدمن الأولى — غيّر 'غيّرني-123' قبل التنفيذ (6 أحرف على الأقل)
 -- ---------------------------------------------------------------------
 insert into public.access_passwords (role, password, holder_name)
 values ('أدمن', 'غيّرني-123', 'المدير');

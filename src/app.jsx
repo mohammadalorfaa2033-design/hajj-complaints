@@ -22,6 +22,8 @@
 //                فترة، ترتيب)، شرائح التصنيفات بأعدادها، فرز بالعناوين، تفاصيل القرار، وتصدير Excel؛ الإضافة للمدير.
 //    2026-09-30  حالة «مغلقة بعد الاعتراض» (جلسة إغلاق بعد الاعتراض)، ونص المشتكي إلزامي في جلسة الإغلاق (ونص المعترض
 //                اختياري بعد الاعتراض) ويُحفظ مع الشكوى.
+//    2026-09-30  زر «📄 تصدير ملف الشكوى (Word)» في تفاصيل الشكوى: ملف ‎.docx قابل للتعديل بالترويسة والترتيب المعتمد
+//                (بديل الأرشفة على Google Drive التي أُلغيت).
 // =======================================================================
 // استيراد خطافات React المستخدمة في المكونات
 const { useState, useEffect, useCallback } = React;
@@ -117,6 +119,113 @@ async function saveWorkbook(sheets, filename) {
     XLSX.utils.book_append_sheet(wb, ws, sh.name.slice(0, 31));
   });
   XLSX.writeFile(wb, filename);
+}
+
+// ---------------------------------------------------------------------
+// تصدير ملف الشكوى الكامل إلى Word ‎(.docx) قابل للتعديل — مكتبة docx تُحمَّل عند أول تصدير فقط
+// الترتيب المعتمد: الترويسة ← المشتكي ← المشتكى عليه ← عنوان الاعتراض ← نص الاعتراض ← الجلسات قبل
+// الاعتراض (موضوع ونتيجة كل جلسة) ← نتيجة الشكوى عند إغلاقها ← الاعتراض ← الجلسات بعده ← نتيجة الاعتراض
+// ---------------------------------------------------------------------
+let docxPromise = null;
+function loadDocx() {
+  if (window.docx) return Promise.resolve(window.docx);
+  if (!docxPromise) docxPromise = new Promise((resolve, reject) => {
+    const s = document.createElement("script");
+    s.src = "https://cdn.jsdelivr.net/npm/docx@8.5.0/build/index.umd.js";
+    s.onload = () => resolve(window.docx);
+    s.onerror = () => { docxPromise = null; reject(new Error("تعذّر تحميل أداة Word")); };
+    document.head.appendChild(s);
+  });
+  return docxPromise;
+}
+
+// بناء مستند Word للشكوى (sess: جلساتها، logo: بيانات صورة الشعار أو null)
+function buildComplaintDoc(D, c, sess, logo) {
+  const { Document, Paragraph, TextRun, Table, TableRow, TableCell, WidthType, ImageRun, BorderStyle, ShadingType } = D;
+  // ألوان الهوية والخط
+  const GREEN = "00594F", GREEN2 = "006E5C", GOLD = "AD9E6E", INK = "333132", MUTED = "939598", SAND = "F5F1EA", FONT = "Arial";
+
+  // نص عربي من اليمين لليسار، والأرقام والتواريخ من اليسار لليمين (حتى لا تنقلب)
+  const runs = (text, o = {}) => String(text == null || text === "" ? "—" : text).split(/(\d[\d\-:\/ ]*\d|\d)/).filter(x => x !== "")
+    .map(part => new TextRun({ text: part, font: FONT, size: o.size || 24, bold: !!o.bold, color: o.color || INK, rightToLeft: !/^\d/.test(part) }));
+  const para = (text, o = {}) => new Paragraph({ bidirectional: true, spacing: { before: o.before || 0, after: o.after == null ? 80 : o.after }, children: runs(text, o) });
+  const heading = text => para(text, { bold: true, size: 28, color: GREEN2, before: 280, after: 120 });
+  // نص طويل في مربع رملي فاتح (كل سطر فقرة)
+  const box = text => String(text || "—").split("\n").map(line => new Paragraph({
+    bidirectional: true, spacing: { after: 0 }, shading: { type: ShadingType.CLEAR, fill: SAND, color: "auto" }, children: runs(line || " "),
+  }));
+  // جدول «عنوان: قيمة» من اليمين لليسار
+  const cell = (text, head) => new TableCell({
+    width: { size: head ? 30 : 70, type: WidthType.PERCENTAGE }, margins: { top: 60, bottom: 60, left: 100, right: 100 },
+    shading: head ? { type: ShadingType.CLEAR, fill: SAND, color: "auto" } : undefined,
+    children: [para(text, { bold: head, color: head ? GREEN : INK, after: 0 })],
+  });
+  const kv = rows => new Table({
+    visuallyRightToLeft: true, width: { size: 100, type: WidthType.PERCENTAGE },
+    rows: rows.filter(r => r[1]).map(r => new TableRow({ children: [cell(r[0], true), cell(r[1], false)] })),
+  });
+
+  // الجلسات مفصّلة: عنوان كل جلسة وتاريخها، ثم موضوعها ونتيجتها
+  const objAt = c.objection_at ? new Date(c.objection_at).getTime() : null;
+  const before = sess.filter(s => objAt === null || new Date(s.session_at).getTime() < objAt);
+  const after = objAt === null ? [] : sess.filter(s => new Date(s.session_at).getTime() >= objAt);
+  const sessionsBlock = list => !list.length ? [para("لا توجد جلسات.", { color: MUTED })] : list.flatMap(s => [
+    para(`الجلسة ${sess.indexOf(s) + 1}${s.title ? " — " + s.title : ""} (${xlDate(s.session_at)})`, { bold: true, size: 26, color: GREEN2, before: 160 }),
+    para("موضوع الجلسة:", { bold: true, after: 40 }), ...box(s.topic),
+    para("نتيجة الجلسة:", { bold: true, before: 80, after: 40 }), ...box(s.result),
+  ]);
+
+  // الترويسة: الشعار واسم الإدارة والقسم، ثم خط ذهبي
+  const head = [
+    new Paragraph({ bidirectional: true, children: [
+      ...(logo ? [new ImageRun({ data: logo, transformation: { width: 64, height: 62 } })] : []),
+      new TextRun({ text: "  إدارة الحج والعمرة", font: FONT, size: 32, bold: true, color: GREEN, rightToLeft: true }),
+      new TextRun({ text: "قسم الشكاوى", font: FONT, size: 24, color: GOLD, rightToLeft: true, break: 1 }),
+    ] }),
+    new Paragraph({ border: { bottom: { style: BorderStyle.SINGLE, size: 12, color: GOLD, space: 4 } }, spacing: { after: 200 }, children: [] }),
+    para(`ملف الشكوى ${c.complaint_number}`, { bold: true, size: 34, color: GREEN, after: 160 }),
+  ];
+
+  // المحتوى بالترتيب المعتمد
+  const closedBefore = objAt !== null || isClosed(c.status);
+  const body = [
+    kv([
+      ["رقم الشكوى", c.complaint_number], ["تاريخ الشكوى", xlDate(c.received_date)], ["الحالة", c.status],
+      ["اسم المشتكي", withRole(c.complainant_name, c.complainant_role)],
+      ["اسم المشتكى عليه", withRole(c.accused_name, c.accused_role)],
+      ["عنوان الاعتراض", c.title],
+    ]),
+    heading("نص الاعتراض"), ...box(c.subject),
+    heading(objAt !== null ? "الجلسات قبل الاعتراض" : "الجلسات"), ...sessionsBlock(before),
+    heading("نتيجة الشكوى عند إغلاقها"),
+    ...(closedBefore ? box(objAt !== null ? c.result_before_objection : c.result) : [para("لم تُغلق الشكوى بعد.", { color: MUTED })]),
+  ];
+  if (objAt !== null) body.push(
+    heading("⚖️ الاعتراض"), para(`تاريخ الاعتراض: ${xlDate(c.objection_at)}`, { color: MUTED }), ...box(c.objection_text),
+    heading("الجلسات بعد الاعتراض"), ...sessionsBlock(after),
+    heading("نتيجة الاعتراض"),
+    ...(c.status === CLOSED_OBJ ? [para(`تاريخ الإغلاق النهائي: ${xlDate(c.closed_date)}`, { color: MUTED }), ...box(c.result)]
+                                : [para("الاعتراض قيد المتابعة.", { color: MUTED })]),
+  );
+  body.push(para(`أُعدّ من منصة الشكاوى في ${xlDate(new Date())}`, { size: 18, color: MUTED, before: 400 }));
+
+  return new Document({ sections: [{ properties: { page: { margin: { top: 1000, bottom: 1000, left: 1000, right: 1000 } } }, children: [...head, ...body] }] });
+}
+
+// التصدير: جلب جلسات الشكوى والشعار، بناء المستند، ثم تنزيله
+async function exportComplaintWord(secret, c) {
+  const D = await loadDocx();
+  const s = await sb.rpc("admin_list_sessions", { p_secret: secret, p_complaint_id: c.id });
+  if (s.error) throw new Error(NET_ERR);
+  const sess = (s.data || []).slice().sort((a, b) => new Date(a.session_at) - new Date(b.session_at));
+  let logo = null;
+  try { const r = await fetch("logo.png"); if (r.ok) logo = new Uint8Array(await r.arrayBuffer()); } catch {}
+  const blob = await D.Packer.toBlob(buildComplaintDoc(D, c, sess, logo));
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `ملف-الشكوى-${c.complaint_number}.docx`;
+  document.body.appendChild(a); a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 2000);
 }
 
 // تصدير كامل للأدمن: الشكاوى والجلسات والإحالات — في ملف واحد
@@ -1897,6 +2006,15 @@ function ComplaintCard({ secret, complaint: c, onSaved, onSessionsChanged, fromD
     setV(x => ({ ...x, referred_to: u.referred_to || "", complainant_result: u.complainant_result || "", accused_result: u.accused_result || "" }));
   }
 
+  // تصدير ملف الشكوى الكامل إلى Word (قابل للتعديل)
+  const [wordBusy, setWordBusy] = useState(false);
+  async function exportWord() {
+    setWordBusy(true); setMsg(null);
+    try { await exportComplaintWord(secret, c); }
+    catch (e) { setMsg({ type: "error", text: e.message || NET_ERR }); }
+    setWordBusy(false);
+  }
+
   // هل أُغلقت نهائياً بعد الاعتراض؟ (تُقفل ولا يبقى إلا تعديل الجلسات)
   const finalClosed = c.status === CLOSED_OBJ;
 
@@ -1982,6 +2100,9 @@ function ComplaintCard({ secret, complaint: c, onSaved, onSessionsChanged, fromD
       <SessionsSection secret={secret} complaint={c} onApplied={applyFromSession} onChanged={() => (onSessionsChanged || (() => {}))()} closeReq={closeReq} />
       <ObjectionSection secret={secret} complaint={c} onSaved={onSaved} />
       {finalClosed && <div className="locked-note">🔒 أُغلقت الشكوى نهائياً بعد الاعتراض — يمكن تعديل الجلسات فقط.</div>}
+      <button type="button" className="btn secondary block" style={{ marginTop: 14 }} disabled={wordBusy} onClick={exportWord}>
+        {wordBusy ? "جارٍ تجهيز الملف…" : "📄 تصدير ملف الشكوى (Word)"}
+      </button>
     </div>
   );
 }
