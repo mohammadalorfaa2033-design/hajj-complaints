@@ -15,6 +15,9 @@
 //                (وزر الرجوع في الجوال)؛ صلاحيتان «مدير» و«موظف» (admin_whoami)، وقسم «👥 الموظفون» للمدير.
 //    2026-09-30  نموذج الشكوى على ثلاث خطوات مع شريط تقدم: بياناتك ← المشتكى عليه ← شكواك.
 //    2026-09-30  سطر «الإحالات» في تفاصيل الشكوى، وورقة «الإحالات» في ملف Excel الكامل (جدول الإحالات الصغير).
+//    2026-09-30  تسلسل الشكوى: الحالة والنتيجة للعرض فقط (من آخر جلسة)، حالتا «قيد مراجعة الاعتراض» و«جاري متابعة
+//                الاعتراض»، الاعتراض بعد الإغلاق فقط والمعترض يرى العنوان فقط، علامة «⚖️ بعد الاعتراض» على النتيجة،
+//                لا جلسات جديدة للمغلقة، «إغلاق عبر جلسة» في مربع «المطلوب»، وأزرار الجلسات والاعتراض بالأخضر.
 // =======================================================================
 // استيراد خطافات React المستخدمة في المكونات
 const { useState, useEffect, useCallback } = React;
@@ -31,8 +34,9 @@ const ROLES = [...(cfg.ROLES || ["حاج", "مرافق", "رئيس مجموعة"
 const replaceList = (list, items) => { if (Array.isArray(items) && items.length) list.splice(0, list.length, ...items); };
 
 // حالات الشكوى (تطابق القيد في schema.sql) واسم لاتيني لكل حالة لاستخدامه في الألوان
-const STATUSES = ["جديد", "قيد المراجعة", "جاري المتابعة", "مغلقة"];
-const ST_KEY = { "جديد": "new", "قيد المراجعة": "review", "جاري المتابعة": "follow", "مغلقة": "closed" };
+const STATUSES = ["جديد", "قيد المراجعة", "جاري المتابعة", "قيد مراجعة الاعتراض", "جاري متابعة الاعتراض", "مغلقة"];
+const ST_KEY = { "جديد": "new", "قيد المراجعة": "review", "جاري المتابعة": "follow",
+                 "قيد مراجعة الاعتراض": "objreview", "جاري متابعة الاعتراض": "objfollow", "مغلقة": "closed" };
 const stClass = s => `st-${ST_KEY[s] || "new"}`;
 const CLOSED = "مغلقة";
 
@@ -704,7 +708,7 @@ function ObjectionPage() {
               <div className="c-no">{view.complaint_number}</div>
               <span className="muted">📅 {fmtDate(view.received_date)}</span>
             </div>
-            <div className="field-label">ملخص الشكوى</div>
+            <div className="field-label">عنوان الشكوى</div>
             <div className="subject">{view.summary}</div>
             {view.result && <><div className="field-label">نتيجة الشكوى</div><div className="subject">{view.result}</div></>}
             {view.deadline && !view.objection_at && (
@@ -1203,16 +1207,11 @@ function ComplaintsTable({ secret, rows, onSaved, onOpen, alertsFor }) {
       {chosen.length > 0 && (
         <div className="bulk-bar">
           <b>✔ {chosen.length} محددة — تغيير إلى:</b>
-          <select value={bulk.status} onChange={e => setBulk(b => ({ ...b, status: e.target.value, closed: e.target.value === CLOSED ? (b.closed || toDateInput(new Date())) : "" }))}>
-            <option value="">الحالة (بلا تغيير)</option>
-            {STATUSES.map(s => <option key={s}>{s}</option>)}
-          </select>
           <select value={bulk.classification} onChange={e => setBulk(b => ({ ...b, classification: e.target.value }))}>
             <option value="">التصنيف (بلا تغيير)</option>
             {CLASSIFICATIONS.map(s => <option key={s}>{s}</option>)}
           </select>
           <input type="text" placeholder="ترحيل / مُحالة إلى" value={bulk.referred_to} onChange={e => setBulk(b => ({ ...b, referred_to: e.target.value }))} />
-          <input type="date" title="تاريخ الإغلاق" value={bulk.closed} onChange={e => setBulk(b => ({ ...b, closed: e.target.value, status: e.target.value ? CLOSED : b.status }))} />
           <button className="btn gold" disabled={busy} onClick={applyBulk}>{busy ? "جارٍ التطبيق…" : `تطبيق على ${chosen.length}`}</button>
           <button className="btn secondary" onClick={() => setSelected(new Set())}>إلغاء التحديد</button>
         </div>
@@ -1837,45 +1836,31 @@ function AdminComplaints({ secret, rows, onSaved, reload, onOpen, initialSearch 
 // والاعتراض والجلسات والسجل. fromDue: فُتحت من «المطلوب» فيظهر في أعلاها طلب تحديد التنبيه القادم
 function ComplaintCard({ secret, complaint: c, onSaved, onSessionsChanged, fromDue }) {
   // القيم القابلة للتعديل وحالة الحفظ
+  // (الحالة والنتيجة والإغلاق للعرض فقط: تأتي من آخر جلسة)
   const [vState, setV] = useState({
     classification: c.classification || "",
     referred_to: c.referred_to || "",
-    status: c.status,
-    result: c.result || "",
     complainant_result: c.complainant_result || "",
     accused_result: c.accused_result || "",
-    closed: c.closed_date ? toDateInput(new Date(c.closed_date)) : "",
     reminder: toDateTimeInput(c.reminder_at),
     reminder_note: c.reminder_note || "",
   });
+  const [closeReq, setCloseReq] = useState(0);   // طلب «إغلاق عبر جلسة» من مربع «المطلوب»
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null);
   const v = vState;
   const set = key => e => { setV(x => ({ ...x, [key]: e.target.value })); setMsg(null); };
 
-  // عند اختيار «مغلقة» يُملأ تاريخ الإغلاق بتاريخ اليوم إن كان فارغاً؛ وأي حالة أخرى تمسح التاريخ
-  function onStatus(e) {
-    const status = e.target.value;
-    setV(x => ({ ...x, status, closed: status === CLOSED ? (x.closed || toDateInput(new Date())) : "" }));
-    setMsg(null);
-  }
-
-  // اختيار تاريخ إغلاق يحوّل الحالة تلقائياً إلى «مغلقة»
-  function onClosedDate(e) {
-    const closed = e.target.value;
-    setV(x => ({ ...x, closed, status: closed ? CLOSED : x.status }));
-    setMsg(null);
-  }
-
-  // الحفظ عبر admin_update_complaint؛ overrides: قيم تُطبَّق فوراً قبل الحفظ (مثل الإغلاق السريع)
+  // الحفظ عبر admin_update_complaint (التصنيف، الإحالة، نتيجتا المشتكي والمعترض، والتنبيه)؛
+  // الحالة والنتيجة والإغلاق تُرسل كما هي ولا تتغيّر (تأتي من الجلسات)
   async function save(overrides) {
     const v = { ...vState, ...(overrides || {}) };
     if (overrides) setV(v);
     setBusy(true); setMsg(null);
     const { data, error } = await sb.rpc("admin_update_complaint", {
       p_secret: secret, p_id: c.id, p_classification: v.classification, p_referred_to: v.referred_to,
-      p_status: v.status, p_result: v.result, p_complainant_result: v.complainant_result, p_accused_result: v.accused_result,
-      p_closed_date: v.status === CLOSED ? dateInputToIso(v.closed || toDateInput(new Date())) : null,
+      p_status: c.status, p_result: c.result, p_complainant_result: v.complainant_result, p_accused_result: v.accused_result,
+      p_closed_date: c.closed_date,
       p_reminder_at: dateTimeInputToIso(v.reminder), p_reminder_note: v.reminder_note,
     });
     setBusy(false);
@@ -1884,33 +1869,30 @@ function ComplaintCard({ secret, complaint: c, onSaved, onSessionsChanged, fromD
     setMsg({ type: "ok", text: "تم الحفظ." });
   }
 
-  // حفظ التنبيه القادم من مربع «المطلوب»: التاريخ والمطلوب إلزاميان (إلا إن كانت الشكوى ستُغلق)
+  // حفظ التنبيه القادم من مربع «المطلوب»: التاريخ والمطلوب إلزاميان
   function saveReminder() {
-    if (v.status !== CLOSED && (!v.reminder || !v.reminder_note.trim()))
-      return setMsg({ type: "error", text: "حدّد تاريخ ووقت التنبيه القادم، واكتب المطلوب عنده — أو اضغط «إغلاق الشكوى بدلاً من ذلك»." });
-    if (v.reminder && new Date(v.reminder) <= new Date() && v.status !== CLOSED)
+    if (!v.reminder || !v.reminder_note.trim())
+      return setMsg({ type: "error", text: "حدّد تاريخ ووقت التنبيه القادم، واكتب المطلوب عنده — أو اضغط «إغلاق عبر جلسة»." });
+    if (new Date(v.reminder) <= new Date())
       return setMsg({ type: "error", text: "موعد التنبيه القادم يجب أن يكون في المستقبل." });
     save();
   }
 
-  // إغلاق سريع من مربع «المطلوب»: الحالة «مغلقة» بتاريخ اليوم، بلا تنبيه، ثم الحفظ
-  function closeNow() {
-    save({ status: CLOSED, closed: v.closed || toDateInput(new Date()), reminder: "", reminder_note: "" });
-  }
-
-  // بعد إضافة جلسة: تحديث الشكوى في القائمة وتحديث الحقول المعروضة بالقيم المرحَّلة
+  // بعد إضافة جلسة أو تعديلها: تحديث الشكوى في القائمة والإحالة المعروضة (الإغلاق يمسح التنبيه اليدوي)
   function applyFromSession(u) {
     onSaved(u);
-    setV(x => ({ ...x, referred_to: u.referred_to || "", status: u.status, result: u.result || "",
-                 closed: u.closed_date ? toDateInput(new Date(u.closed_date)) : "" }));
+    setV(x => ({ ...x, referred_to: u.referred_to || "" }));
   }
+
+  // هل أُغلقت نهائياً بعد الاعتراض؟ (تُقفل ولا يبقى إلا تعديل الجلسات)
+  const finalClosed = c.status === CLOSED && !!c.objection_at;
 
   // التنبيهات الذكية للشكوى كما هي محفوظة
   const alerts = smartAlerts(c);
 
   // العرض: الرأس، التنبيهات، البيانات، الموضوع، ثم حقول الإدارة وزر الحفظ
   return (
-    <div className={`card status-card ${stClass(v.status)}`}>
+    <div className={`card status-card ${stClass(c.status)}`}>
       <div className="c-head">
         <div>
           <div className="c-no">{c.complaint_number}</div>
@@ -1932,16 +1914,10 @@ function ComplaintCard({ secret, complaint: c, onSaved, onSessionsChanged, fromD
       {c.title && <div className="c-title">📝 {c.title}</div>}
       <div className="subject">{c.subject}</div>
       {msg && <Alert type={msg.type}>{msg.text}</Alert>}
-      {fromDue && (v.status === CLOSED ? (
-        <div className="due-prompt closed">
-          <b>🔒 الشكوى ستُغلق — لا حاجة لتنبيه قادم</b>
-          <small className="muted" style={{ display: "block", marginBottom: 10 }}>تاريخ الإغلاق: {v.closed || toDateInput(new Date())} (يمكن تغييره من خانة «تاريخ الإغلاق» في الأسفل).</small>
-          <button type="button" className="btn block" disabled={busy} onClick={() => save()}>{busy ? "جارٍ الحفظ…" : "حفظ وإغلاق"}</button>
-        </div>
-      ) : (
+      {fromDue && c.status !== CLOSED && (
         <div className="due-prompt">
           <b>⏰ حدّد موعد التنبيه القادم والمطلوب عنده</b>
-          <small className="muted" style={{ display: "block", marginBottom: 10 }}>حتى تعود هذه الشكوى إلى «المطلوب» في موعدها ولا تُنسى. وإن انتهت متابعتها فأغلقها بالزر في الأسفل.</small>
+          <small className="muted" style={{ display: "block", marginBottom: 10 }}>حتى تعود هذه الشكوى إلى «المطلوب» في موعدها ولا تُنسى. وإن انتهت متابعتها فأغلقها بجلسة إغلاق.</small>
           <div className="grid">
             <Field label="تاريخ ووقت التنبيه" required>
               <div className="row" style={{ flexWrap: "nowrap" }}>
@@ -1952,11 +1928,11 @@ function ComplaintCard({ secret, complaint: c, onSaved, onSessionsChanged, fromD
             <Field label="المطلوب عند التنبيه" required><input type="text" value={v.reminder_note} onChange={set("reminder_note")} maxLength={500} placeholder="مثال: الاتصال بمسؤول السكن" /></Field>
           </div>
           <div className="grid" style={{ gridTemplateColumns: "1fr 1fr", marginTop: 10 }}>
-            <button type="button" className="btn gold" disabled={busy} onClick={saveReminder}>{busy ? "جارٍ الحفظ…" : "حفظ التنبيه والتعديلات"}</button>
-            <button type="button" className="btn secondary" disabled={busy} onClick={closeNow}>🔒 إغلاق الشكوى بدلاً من ذلك</button>
+            <button type="button" className="btn" disabled={busy} onClick={saveReminder}>{busy ? "جارٍ الحفظ…" : "حفظ التنبيه والتعديلات"}</button>
+            <button type="button" className="btn secondary" disabled={busy} onClick={() => setCloseReq(n => n + 1)}>🔒 إغلاق عبر جلسة</button>
           </div>
         </div>
-      ))}
+      )}
       <div className="grid">
         <Field label="التصنيف">
           <select value={v.classification} onChange={set("classification")}>
@@ -1966,11 +1942,8 @@ function ComplaintCard({ secret, complaint: c, onSaved, onSessionsChanged, fromD
           </select>
         </Field>
         <Field label="ترحيل / مُحالة إلى"><input type="text" value={v.referred_to} onChange={set("referred_to")} maxLength={200} placeholder="الجهة أو الشخص" /></Field>
-        <Field label="الحالة">
-          <select value={v.status} onChange={onStatus}>{STATUSES.map(x => <option key={x}>{x}</option>)}</select>
-        </Field>
-        <Field label="تاريخ الإغلاق" hint="اختيار تاريخ يجعل الحالة «مغلقة»">
-          <input type="date" value={v.closed} onChange={onClosedDate} />
+        <Field label="الحالة" hint="تتغيّر تلقائياً من الجلسات">
+          <div className="readonly-field"><StatusBadge value={c.status} />{c.closed_date && <span className="muted"> · أُغلقت {fmtDate(c.closed_date)}</span>}</div>
         </Field>
         {!fromDue && (
           <>
@@ -1983,9 +1956,6 @@ function ComplaintCard({ secret, complaint: c, onSaved, onSessionsChanged, fromD
             <Field label="المطلوب عند التنبيه"><input type="text" value={v.reminder_note} onChange={set("reminder_note")} maxLength={500} placeholder="مثال: الاتصال بمسؤول السكن" /></Field>
           </>
         )}
-        <Field label="📋 نتيجة الشكوى" hint="داخلية: للأدمن والإدارة فقط؛ نتيجة آخر جلسة تنتقل إليها" full>
-          <textarea style={{ minHeight: 70 }} value={v.result} onChange={set("result")} maxLength={2000} />
-        </Field>
         <Field label="👤 النتيجة التي يراها المشتكي" hint="تظهر للمشتكي في صفحة «نتيجة الشكوى» — لا تأتي من الجلسات" full>
           <textarea style={{ minHeight: 70 }} value={v.complainant_result} onChange={set("complainant_result")} maxLength={2000} />
         </Field>
@@ -1993,10 +1963,29 @@ function ComplaintCard({ secret, complaint: c, onSaved, onSessionsChanged, fromD
           <textarea style={{ minHeight: 70 }} value={v.accused_result} onChange={set("accused_result")} maxLength={2000} />
         </Field>
       </div>
+      <ResultBox c={c} />
       <ReferralsLine secret={secret} id={c.id} version={c.updated_at} />
       <button className="btn block" style={{ marginTop: 14 }} disabled={busy} onClick={() => save()}>{busy ? "جارٍ الحفظ…" : "حفظ"}</button>
+      <SessionsSection secret={secret} complaint={c} onApplied={applyFromSession} onChanged={() => (onSessionsChanged || (() => {}))()} closeReq={closeReq} />
       <ObjectionSection secret={secret} complaint={c} onSaved={onSaved} />
-      <SessionsSection secret={secret} complaint={c} onApplied={applyFromSession} onChanged={() => (onSessionsChanged || (() => {}))()} />
+      {finalClosed && <div className="locked-note">🔒 أُغلقت الشكوى نهائياً بعد الاعتراض — يمكن تعديل الجلسات فقط.</div>}
+    </div>
+  );
+}
+
+// «نتيجة الشكوى» للعرض فقط: من آخر جلسة؛ بعد الاعتراض تظهر علامة ⚖️ والنتيجة قبل الاعتراض تحتها
+function ResultBox({ c }) {
+  const afterObjection = !!c.objection_at;
+  return (
+    <div className="result-box">
+      <div className="field-label">
+        📋 نتيجة الشكوى {afterObjection && <span className="obj-tag">⚖️ بعد الاعتراض</span>}
+        <small className="muted"> — من آخر جلسة (لا تُكتب يدوياً)</small>
+      </div>
+      <div className="subject">{c.result || <span className="muted">لم تصدر بعد — تُضاف من الجلسات</span>}</div>
+      {afterObjection && c.result_before_objection && (
+        <div className="muted" style={{ fontSize: 13.5, marginTop: 6 }}>النتيجة قبل الاعتراض: {c.result_before_objection}</div>
+      )}
     </div>
   );
 }
@@ -2026,7 +2015,6 @@ const defaultDeadline = () => { const d = new Date(); d.setDate(d.getDate() + OB
 
 function ObjectionSection({ secret, complaint: c, onSaved }) {
   // الملخص، آخر موعد، وضع النموذج (generate / extend)، بيانات التمديد، والرسائل
-  const [summary, setSummary] = useState(c.objection_summary || [c.title, c.subject].filter(Boolean).join("\n") || "");
   const [deadline, setDeadline] = useState(defaultDeadline);
   const [mode, setMode] = useState(null);
   const [ext, setExt] = useState({ at: defaultDeadline(), reason: "" });
@@ -2038,10 +2026,9 @@ function ObjectionSection({ secret, complaint: c, onSaved }) {
 
   // توليد الرمز عبر admin_set_objection_code (إعادة التوليد تُبطل الرمز القديم)
   async function generate() {
-    if (!summary.trim()) return setMsg({ type: "error", text: "اكتب الملخص الذي سيراه المشتكى عليه." });
     if (!deadline || new Date(deadline) <= new Date()) return setMsg({ type: "error", text: "آخر موعد للاعتراض يجب أن يكون في المستقبل." });
     setBusy(true); setMsg(null);
-    const { data, error } = await sb.rpc("admin_set_objection_code", { p_secret: secret, p_id: c.id, p_summary: summary, p_deadline: dateTimeInputToIso(deadline) });
+    const { data, error } = await sb.rpc("admin_set_objection_code", { p_secret: secret, p_id: c.id, p_summary: c.title || "", p_deadline: dateTimeInputToIso(deadline) });
     setBusy(false);
     if (error || !data || !data.length) return setMsg({ type: "error", text: "تعذّر توليد الرمز، يرجى المحاولة مرة أخرى." });
     onSaved(data[0]);
@@ -2090,18 +2077,18 @@ function ObjectionSection({ secret, complaint: c, onSaved }) {
           </div>
           <button type="button" className="btn danger-text" style={{ marginTop: 6 }} onClick={() => { setMode("generate"); setMsg(null); }}>🔄 رمز جديد / تعديل الملخص</button>
         </>
+      ) : !mode && c.status !== CLOSED ? (
+        <p className="muted" style={{ marginTop: 0 }}>يصبح الاعتراض متاحاً بعد إغلاق الشكوى.</p>
       ) : !mode ? (
         <>
-          <p className="muted" style={{ marginTop: 0 }}>لم يُرسَل للمشتكى عليه رمز اعتراض بعد.</p>
-          <button type="button" className="btn secondary block" onClick={() => setMode("generate")}>⚖️ توليد رمز اعتراض للمشتكى عليه</button>
+          <p className="muted" style={{ marginTop: 0 }}>أُغلقت الشكوى — يمكنك الآن إرسال رمز اعتراض للمشتكى عليه (مرة واحدة).</p>
+          <button type="button" className="btn block" onClick={() => setMode("generate")}>⚖️ توليد رمز اعتراض للمشتكى عليه</button>
         </>
       ) : null}
 
       {mode === "generate" && !c.objection_at && (
         <div className="session-form">
-          <Field label="الملخص الذي سيراه المشتكى عليه" hint="احذف منه ما قد يكشف هوية المشتكي؛ لا يظهر له اسم المشتكي ولا رقمه">
-            <textarea style={{ minHeight: 90 }} value={summary} onChange={e => setSummary(e.target.value)} maxLength={5000} />
-          </Field>
+          <div className="readonly-field" style={{ marginBottom: 6 }}>سيرى المشتكى عليه عنوان الاعتراض فقط: <b>«{c.title || "—"}»</b></div>
           <div style={{ marginTop: 10 }}>
             <Field label="آخر موعد للاعتراض" hint={`الافتراضي بعد ${OBJECTION_DAYS} أيام؛ بعده يُرفض الاعتراض إلا بتمديد استثنائي`}>
               <input type="datetime-local" value={deadline} onChange={e => setDeadline(e.target.value)} />
@@ -2109,7 +2096,7 @@ function ObjectionSection({ secret, complaint: c, onSaved }) {
           </div>
           {c.objection_code && <small className="hint" style={{ display: "block", marginTop: 6 }}>توليد رمز جديد يُبطل الرمز السابق.</small>}
           <div className="grid" style={{ gridTemplateColumns: "1fr 1fr", marginTop: 10 }}>
-            <button type="button" className="btn gold" disabled={busy} onClick={generate}>{busy ? "جارٍ التوليد…" : "توليد الرمز"}</button>
+            <button type="button" className="btn" disabled={busy} onClick={generate}>{busy ? "جارٍ التوليد…" : "توليد الرمز"}</button>
             <button type="button" className="btn secondary" onClick={() => setMode(null)}>تراجع</button>
           </div>
         </div>
@@ -2123,7 +2110,7 @@ function ObjectionSection({ secret, complaint: c, onSaved }) {
             <Field label="سبب الاستثناء" required full><textarea style={{ minHeight: 70 }} value={ext.reason} onChange={e => setExt(x => ({ ...x, reason: e.target.value }))} maxLength={500} placeholder="مثال: كان المشتكى عليه في المشاعر ولم يتمكن من الاطلاع" /></Field>
           </div>
           <div className="grid" style={{ gridTemplateColumns: "1fr 1fr", marginTop: 10 }}>
-            <button type="button" className="btn gold" disabled={busy} onClick={extend}>{busy ? "جارٍ الحفظ…" : "تمديد"}</button>
+            <button type="button" className="btn" disabled={busy} onClick={extend}>{busy ? "جارٍ الحفظ…" : "تمديد"}</button>
             <button type="button" className="btn secondary" onClick={() => setMode(null)}>تراجع</button>
           </div>
         </div>
@@ -2137,13 +2124,14 @@ function ObjectionSection({ secret, complaint: c, onSaved }) {
 // ---------------------------------------------------------------------
 // قسم الجلسات داخل تفاصيل الشكوى: سجل جلساتها + إضافة جلسة أو تعديلها (لا حذف)؛
 // قيم أحدث جلسة تُرحَّل إلى الشكوى، والنتيجة إلى «نتيجة الشكوى» الداخلية فقط
-// حالات الجلسة: بدء الجلسات يعني «جاري المتابعة»، أو إغلاق الشكوى
-const SESSION_STATUSES = ["جاري المتابعة", CLOSED];
-const sessionStatus = s => SESSION_STATUSES.includes(s) ? s : "جاري المتابعة";
+// حالات الجلسة: «جاري المتابعة» (أو «جاري متابعة الاعتراض» للجلسة بعد الاعتراض)، أو إغلاق الشكوى
+const sessionStatuses = (complaint, at) =>
+  [complaint.objection_at && (!at || new Date(at) >= new Date(complaint.objection_at)) ? "جاري متابعة الاعتراض" : "جاري المتابعة", CLOSED];
+const sessionStatus = (complaint, s, at) => s === CLOSED ? CLOSED : sessionStatuses(complaint, at)[0];
 
-function SessionsSection({ secret, complaint, onApplied, onChanged }) {
+function SessionsSection({ secret, complaint, onApplied, onChanged, closeReq = 0 }) {
   // سجل الجلسات، النموذج (جلسة جديدة أو تعديل جلسة: editId)، والرسائل
-  const blank = () => ({ at: toDateTimeInput(new Date()), title: "", topic: "", referred_to: complaint.referred_to || "", result: "", status: sessionStatus(complaint.status) });
+  const blank = () => ({ at: toDateTimeInput(new Date()), title: "", topic: "", referred_to: complaint.referred_to || "", result: "", status: sessionStatus(complaint, complaint.status) });
   const [list, setList] = useState(null);
   const [form, setForm] = useState(blank);
   const [editId, setEditId] = useState(null);
@@ -2162,9 +2150,20 @@ function SessionsSection({ secret, complaint, onApplied, onChanged }) {
   // بدء تعديل جلسة: تعبئة النموذج بقيمها
   function startEdit(s) {
     setEditId(s.id);
-    setForm({ at: toDateTimeInput(s.session_at), title: s.title || "", topic: s.topic || "", referred_to: s.referred_to || "", result: s.result || "", status: sessionStatus(s.status) });
+    setForm({ at: toDateTimeInput(s.session_at), title: s.title || "", topic: s.topic || "", referred_to: s.referred_to || "", result: s.result || "", status: sessionStatus(complaint, s.status, s.session_at) });
     setMsg(null);
   }
+
+  // طلب «إغلاق عبر جلسة» من مربع «المطلوب»: نموذج جلسة جديدة بحالة «مغلقة» والصعود إليه
+  const formRef = React.useRef(null);
+  useEffect(() => {
+    if (!closeReq) return;
+    setEditId(null); setForm(f => ({ ...blank(), title: f.title, topic: f.topic, result: f.result, status: CLOSED }));
+    setTimeout(() => formRef.current && formRef.current.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+  }, [closeReq]);
+
+  // الشكوى المغلقة: لا جلسات جديدة (إلا بعد اعتراض)، والتعديل متاح
+  const closed = complaint.status === CLOSED;
 
   // إلغاء التعديل والعودة لنموذج جلسة جديدة
   function cancelEdit() { setEditId(null); setForm(blank()); setMsg(null); }
@@ -2180,6 +2179,7 @@ function SessionsSection({ secret, complaint, onApplied, onChanged }) {
       ? await sb.rpc("admin_update_session", { ...args, p_id: editId })
       : await sb.rpc("admin_add_session", { ...args, p_complaint_id: complaint.id });
     setBusy(false);
+    if (error && /مغلقة/.test(error.message || "")) return setMsg({ type: "error", text: "الشكوى مغلقة: يمكن تعديل جلساتها فقط." });
     if (error || !data || !data.length) return setMsg({ type: "error", text: editId ? "تعذّر تعديل الجلسة، يرجى المحاولة مرة أخرى." : "تعذّر إضافة الجلسة، يرجى المحاولة مرة أخرى." });
     onApplied(data[0]);
     setMsg({ type: "ok", text: editId ? "تم تعديل الجلسة." : "تمت إضافة الجلسة، ورُحِّل المحال إليه ونتيجة الجلسة والحالة إلى الشكوى (إن كانت أحدث جلسة)." });
@@ -2212,30 +2212,34 @@ function SessionsSection({ secret, complaint, onApplied, onChanged }) {
           </table>
         </div>
       )}
-      <form onSubmit={submit} className="session-form">
+      {closed && !editId ? (
+        <p className="muted" style={{ fontSize: 13.5 }}>🔒 الشكوى مغلقة — لا تُضاف جلسات جديدة{complaint.objection_at ? "" : " إلا بعد وصول اعتراض"}. يمكن تعديل أي جلسة بزر «✏️ تعديل».</p>
+      ) : (
+      <form onSubmit={submit} className="session-form" ref={formRef}>
         <div className="field-label" style={{ marginBottom: 8 }}>{editId ? "✏️ تعديل الجلسة" : "➕ جلسة جديدة"}</div>
         <div className="grid">
           <Field label="التاريخ والوقت" required><input type="datetime-local" value={form.at} onChange={set("at")} /></Field>
           <Field label="عنوان الجلسة"><input type="text" value={form.title} onChange={set("title")} maxLength={200} placeholder="مثال: جلسة استماع للطرفين" /></Field>
           <Field label="ترحيل / مُحالة إلى"><input type="text" value={form.referred_to} onChange={set("referred_to")} maxLength={200} placeholder="الجهة أو الشخص" /></Field>
-          <Field label="حالة الشكوى بعد الجلسة" required hint="بدء الجلسات يجعل الشكوى «جاري المتابعة» تلقائياً">
-            <select value={form.status} onChange={set("status")}>{SESSION_STATUSES.map(x => <option key={x}>{x}</option>)}</select>
+          <Field label="حالة الشكوى بعد الجلسة" required hint="«مغلقة» تغلق الشكوى بتاريخ الجلسة">
+            <select value={form.status} onChange={set("status")}>{sessionStatuses(complaint, editId ? form.at : null).map(x => <option key={x}>{x}</option>)}</select>
           </Field>
           <Field label="موضوع الجلسة" full><textarea style={{ minHeight: 60 }} value={form.topic} onChange={set("topic")} maxLength={2000} placeholder="ما الذي نوقش في الجلسة" /></Field>
           <Field label="نتيجة الجلسة" full><textarea style={{ minHeight: 70 }} value={form.result} onChange={set("result")} maxLength={2000} /></Field>
         </div>
         {editId ? (
           <div className="grid" style={{ gridTemplateColumns: "1fr 1fr", marginTop: 12 }}>
-            <button className="btn gold" disabled={busy}>{busy ? "جارٍ الحفظ…" : "حفظ التعديل"}</button>
+            <button className="btn" disabled={busy}>{busy ? "جارٍ الحفظ…" : "💾 حفظ التعديل"}</button>
             <button type="button" className="btn secondary" onClick={cancelEdit}>إلغاء التعديل</button>
           </div>
         ) : (
-          <button className="btn gold block" style={{ marginTop: 12 }} disabled={busy}>{busy ? "جارٍ الإضافة…" : "إضافة الجلسة وترحيلها إلى الشكوى"}</button>
+          <button className="btn block" style={{ marginTop: 12 }} disabled={busy}>{busy ? "جارٍ الإضافة…" : "➕ إضافة الجلسة وترحيلها إلى الشكوى"}</button>
         )}
         <small className="hint" style={{ display: "block", marginTop: 6 }}>
-          المحال إليه والحالة ونتيجة الجلسة تنتقل إلى الشكوى تلقائياً (النتيجة إلى «نتيجة الشكوى» الداخلية فقط، لا إلى ما يراه المشتكي أو المعترض)؛ الحقل الفارغ لا يمسح قيمة الشكوى. الجلسات لا تُحذف، ويمكن تعديلها.
+          آخر جلسة تحدّد حالة الشكوى ونتيجتها والمحال إليه (النتيجة إلى «نتيجة الشكوى» الداخلية فقط، لا إلى ما يراه المشتكي أو المعترض)؛ الحقل الفارغ لا يمسح قيمة الشكوى. الجلسات لا تُحذف، ويمكن تعديلها.
         </small>
       </form>
+      )}
     </div>
   );
 }

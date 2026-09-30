@@ -60,6 +60,8 @@
 --    2026-09-30  القسم 24: صلاحيتان «مدير» و«موظف» (admin_whoami، كلمات مرور الموظفين، دوال المدير فقط).
 --    2026-09-30  القسم الأخير: إعادة القيمة المثالية لكلمة مرور الأدمن الأولى (المستودع عام).
 --    2026-09-30  القسم 25: الأرشفة على Drive — جدول الإحالات، «النتيجة قبل الاعتراض»، مفتاح الأرشفة و archive_export.
+--    2026-09-30  القسم 26: تسلسل الشكوى — حالتا «قيد مراجعة الاعتراض» و«جاري متابعة الاعتراض»، الحالة والنتيجة من
+--                آخر جلسة فقط، رمز الاعتراض بعد الإغلاق فقط، المعترض يرى العنوان فقط، ومنع الجلسات على المغلقة.
 -- =====================================================================
 
 -- ---------------------------------------------------------------------
@@ -2579,7 +2581,165 @@ grant execute on function public.admin_list_referrals(text)            to anon, 
 grant execute on function public.archive_export(text)                  to anon, authenticated;
 
 -- ---------------------------------------------------------------------
--- 26) كلمة مرور الأدمن الأولى — غيّر 'غيّرني-123' قبل التنفيذ (6 أحرف على الأقل)
+-- 26) تسلسل الشكوى الجديد
+--     جديد ← (فتح البطاقة) قيد المراجعة ← (جلسة) جاري المتابعة ← (جلسة إغلاق) مغلقة
+--       ← (اعتراض) قيد مراجعة الاعتراض ← (جلسة) جاري متابعة الاعتراض ← (جلسة إغلاق) مغلقة نهائياً
+--     - الحالة والنتيجة والإغلاق تأتي من آخر جلسة فقط (لا تُكتب يدوياً في الشكوى)
+--     - رمز الاعتراض يُولَّد بعد إغلاق الشكوى فقط، والمعترض يرى «عنوان الاعتراض» فقط
+--     - الشكوى المغلقة لا تُضاف لها جلسات (إلا بعد وصول اعتراض)؛ تعديل الجلسات متاح دائماً
+--     يُنفَّذ وحده أيضاً كتحديث لقاعدة موجودة (لا يحذف بيانات)
+-- ---------------------------------------------------------------------
+-- الحالتان الجديدتان في الشكوى والجلسة
+alter table public.complaints drop constraint if exists complaints_status_check;
+alter table public.complaints add constraint complaints_status_check
+  check (status in ('جديد', 'قيد المراجعة', 'جاري المتابعة', 'قيد مراجعة الاعتراض', 'جاري متابعة الاعتراض', 'مغلقة'));
+alter table public.sessions drop constraint if exists sessions_status_check;
+alter table public.sessions add constraint sessions_status_check
+  check (status in ('جديد', 'قيد المراجعة', 'جاري المتابعة', 'قيد مراجعة الاعتراض', 'جاري متابعة الاعتراض', 'مغلقة'));
+
+-- قبل حفظ جلسة: غير «مغلقة» ← «جاري المتابعة»، أو «جاري متابعة الاعتراض» إن كانت الجلسة بعد الاعتراض
+create or replace function public.sessions_before_write()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare
+  v_obj timestamptz;
+begin
+  select objection_at into v_obj from public.complaints where id = new.complaint_id;
+  if new.status <> 'مغلقة' then
+    new.status := case when v_obj is not null and new.session_at >= v_obj then 'جاري متابعة الاعتراض' else 'جاري المتابعة' end;
+  end if;
+  return new;
+end $$;
+
+-- إضافة جلسة (نسخة تمنع الإضافة لشكوى مغلقة)
+create or replace function public.admin_add_session(
+  p_secret text, p_complaint_id uuid, p_session_at timestamptz,
+  p_title text, p_topic text, p_referred_to text, p_result text, p_status text
+) returns setof public.complaints
+language plpgsql security definer set search_path = public as $$
+begin
+  if public.verify_password('أدمن', p_secret) is null then
+    return;
+  end if;
+  if exists (select 1 from public.complaints where id = p_complaint_id and status = 'مغلقة') then
+    raise exception 'الشكوى مغلقة: يمكن تعديل جلساتها فقط';
+  end if;
+  insert into public.sessions (complaint_id, session_at, title, topic, referred_to, result, status)
+  values (p_complaint_id, coalesce(p_session_at, now()),
+          nullif(btrim(left(p_title, 200)), ''), nullif(btrim(left(p_topic, 2000)), ''),
+          nullif(btrim(left(p_referred_to, 200)), ''), nullif(btrim(left(p_result, 2000)), ''), p_status);
+  return query select * from public.complaints where id = p_complaint_id;
+end $$;
+
+-- تحديث الشكوى من الأدمن (نسخة لا تغيّر الحالة ولا النتيجة ولا الإغلاق — هذه من الجلسات فقط)
+create or replace function public.admin_update_complaint(
+  p_secret text, p_id uuid, p_classification text, p_referred_to text, p_status text,
+  p_result text, p_complainant_result text, p_accused_result text,
+  p_closed_date timestamptz, p_reminder_at timestamptz, p_reminder_note text
+) returns setof public.complaints
+language plpgsql security definer set search_path = public as $$
+begin
+  if public.verify_password('أدمن', p_secret) is null then
+    return;
+  end if;
+  update public.complaints set
+    classification     = nullif(btrim(p_classification), ''),
+    referred_to        = nullif(btrim(p_referred_to), ''),
+    complainant_result = nullif(btrim(p_complainant_result), ''),
+    accused_result     = nullif(btrim(p_accused_result), ''),
+    reminder_at        = p_reminder_at,
+    reminder_note      = nullif(btrim(left(p_reminder_note, 500)), '')
+  where id = p_id;
+  return query select * from public.complaints where id = p_id;
+end $$;
+
+-- التعديل الجماعي (نسخة: التصنيف والإحالة فقط؛ الحالة والإغلاق من الجلسات)
+create or replace function public.admin_bulk_update(
+  p_secret text, p_ids uuid[], p_status text, p_classification text, p_referred_to text, p_closed_date timestamptz
+) returns setof public.complaints
+language plpgsql security definer set search_path = public as $$
+begin
+  if public.verify_password('أدمن', p_secret) is null then
+    return;
+  end if;
+  update public.complaints set
+    classification = coalesce(nullif(btrim(p_classification), ''), classification),
+    referred_to    = coalesce(nullif(btrim(p_referred_to), ''), referred_to)
+  where id = any (p_ids);
+  return query select * from public.complaints where id = any (p_ids);
+end $$;
+
+-- توليد رمز الاعتراض (نسخة: بعد الإغلاق فقط، والملخص = عنوان الاعتراض تلقائياً)
+create or replace function public.admin_set_objection_code(p_secret text, p_id uuid, p_summary text, p_deadline timestamptz)
+returns setof public.complaints
+language plpgsql security definer set search_path = public as $$
+begin
+  if public.verify_password('أدمن', p_secret) is null then
+    return;
+  end if;
+  if not exists (select 1 from public.complaints where id = p_id and status = 'مغلقة' and objection_at is null) then
+    raise exception 'رمز الاعتراض يُولَّد بعد إغلاق الشكوى، ومرة اعتراض واحدة فقط';
+  end if;
+  update public.complaints
+     set objection_code     = public.random_password(6, true),
+         objection_summary  = title,
+         objection_deadline = coalesce(p_deadline, now() + interval '3 days')
+   where id = p_id;
+  return query select * from public.complaints where id = p_id;
+end $$;
+
+-- ما يراه المعترض (نسخة: عنوان الاعتراض فقط بدل الملخص)
+create or replace function public.objection_view(p_number text, p_code text)
+returns table (complaint_number text, received_date timestamptz, summary text, objection_text text,
+               objection_at timestamptz, deadline timestamptz, result text)
+language sql stable security definer set search_path = public as $$
+  select c.complaint_number, c.received_date, c.title, c.objection_text, c.objection_at,
+         c.objection_deadline, c.accused_result
+  from public.complaints c
+  where c.complaint_number = public.normalize_number(p_number)
+    and c.objection_code is not null
+    and c.objection_code = regexp_replace(translate(coalesce(p_code, ''), '٠١٢٣٤٥٦٧٨٩', '0123456789'), '\D', '', 'g');
+$$;
+
+-- تقديم الاعتراض (نسخة: الشكوى تصبح «قيد مراجعة الاعتراض»)
+create or replace function public.submit_objection(p_number text, p_code text, p_text text)
+returns text
+language plpgsql security definer set search_path = public as $$
+declare
+  v_id       uuid;
+  v_done     timestamptz;
+  v_deadline timestamptz;
+begin
+  if coalesce(btrim(p_text), '') = '' then
+    raise exception 'نص الاعتراض فارغ';
+  end if;
+  if length(p_text) > 5000 then
+    raise exception 'تجاوز النص الطول المسموح';
+  end if;
+  select c.id, c.objection_at, c.objection_deadline into v_id, v_done, v_deadline
+  from public.complaints c
+  where c.complaint_number = public.normalize_number(p_number)
+    and c.objection_code is not null
+    and c.objection_code = regexp_replace(translate(coalesce(p_code, ''), '٠١٢٣٤٥٦٧٨٩', '0123456789'), '\D', '', 'g')
+  for update;
+  if v_id is null then
+    return 'INVALID';
+  end if;
+  if v_done is not null then
+    return 'ALREADY';
+  end if;
+  if v_deadline is not null and now() > v_deadline then
+    return 'EXPIRED';
+  end if;
+  update public.complaints set
+    objection_text = btrim(p_text),
+    objection_at   = now(),
+    status         = 'قيد مراجعة الاعتراض'
+  where id = v_id;
+  return 'OK';
+end $$;
+
+-- ---------------------------------------------------------------------
+-- 27) كلمة مرور الأدمن الأولى — غيّر 'غيّرني-123' قبل التنفيذ (6 أحرف على الأقل)
 -- ---------------------------------------------------------------------
 insert into public.access_passwords (role, password, holder_name)
 values ('أدمن', 'غيّرني-123', 'المدير');
