@@ -25,6 +25,7 @@
 //    2026-09-30  زر «📄 تصدير ملف الشكوى (Word)» في تفاصيل الشكوى: ملف ‎.docx قابل للتعديل بالترويسة والترتيب المعتمد
 //                (بديل الأرشفة على Google Drive التي أُلغيت).
 //    2026-09-30  ملف Word: الترويسة الرسمية (letterhead.jpg) في رأس كل صفحة بدل الشعار والنص.
+//    2026-09-30  قسم «📘 دليل المنصة» في الرئيسية للمدير والموظف (تقرير المنصة داخل اللوحة، مع تسلسل الحالات بألوانها).
 // =======================================================================
 // استيراد خطافات React المستخدمة في المكونات
 const { useState, useEffect, useCallback } = React;
@@ -960,6 +961,7 @@ const SECTIONS = {
   sessions:   { title: "🗓️ الجلسات" },
   links:      { title: "🔗 إرسال رابط" },
   decisions:  { title: "📑 القرارات الإدارية" },
+  guide:      { title: "📘 دليل المنصة" },
   access:     { title: "🔐 دخول المشتكين", manager: true },
   viewers:    { title: "📊 كلمات مرور الإدارة", manager: true },
   staff:      { title: "👥 الموظفون", manager: true },
@@ -1057,6 +1059,7 @@ function AdminPage({ secret }) {
           {tab === "today" && <AdminDue secret={secret} rows={rows} onSaved={onSaved} reload={reload} onOpen={c => openComplaint(c, true)} />}
           {tab === "links" && <AdminLinks secret={secret} isManager={isManager} />}
           {tab === "decisions" && <AdminDecisions secret={secret} isManager={isManager} />}
+          {tab === "guide" && <AdminGuide isManager={isManager} />}
           {tab === "complaints" && <AdminComplaints secret={secret} rows={rows} onSaved={onSaved} reload={reload} onOpen={c => openComplaint(c)}
                                      initialSearch={start.search || ""} initialFilter={start.filter || "الكل"} />}
           {tab === "sessions" && <AdminSessions secret={secret} version={sessVer} onOpen={c => openComplaint(c)} />}
@@ -1114,6 +1117,7 @@ function AdminHome({ me, isManager, rows, go }) {
         <Tile icon="🗓️" title="الجلسات" onClick={() => go("sessions")} />
         <Tile icon="🔗" title="إرسال رابط" sub="لمشتكٍ أو للإدارة" onClick={() => go("links")} />
         <Tile icon="📑" title="القرارات الإدارية" sub="بحث وروابط" onClick={() => go("decisions")} />
+        <Tile icon="📘" title="دليل المنصة" sub="كيف تعمل المنصة" onClick={() => go("guide")} />
       </div>
       {isManager && (
         <>
@@ -2700,6 +2704,130 @@ function AdminDecisions({ secret, isManager }) {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// دليل المنصة (للمدير والموظف): نبذة، الصفحات، تسلسل الشكوى بألوان الحالات، أقسام اللوحة، الصلاحيات،
+// التصدير، التقنية، ثم التوصيات؛ و«خطوات متبقية» للمدير فقط
+// ---------------------------------------------------------------------
+// سطر في قائمة الدليل: عنوان بخط عريض ووصفه
+function GuideItem({ name, children }) {
+  return <li><div><b>{name}</b><div className="muted" style={{ fontSize: 14 }}>{children}</div></div></li>;
+}
+
+// سهم بين حالتين مع وصف الانتقال (الاتجاه من اليمين لليسار)
+function FlowStep({ label }) {
+  return <span className="flow-step"><small>{label}</small><span>←</span></span>;
+}
+
+function AdminGuide({ isManager }) {
+  return (
+    <div className="guide">
+      <div className="card">
+        <h2>نبذة</h2>
+        <p style={{ marginTop: 0 }}>منصة الشكاوى تستقبل شكاوى الحجاج من الجوال، ويتابعها قسم الشكاوى بالجلسات حتى الإغلاق، مع اعتراض واحد للمشتكى عليه.</p>
+        <ul className="list">
+          <GuideItem name="لمن">الحجاج ومرافقوهم، والمشتكى عليه، وموظفو القسم ومديره، والإدارة العليا للتقارير.</GuideItem>
+          <GuideItem name="الهدف">تسجيل كل شكوى برقم واضح، ومتابعتها حتى نتيجة موثّقة، دون أوراق ضائعة أو شكاوى منسية.</GuideItem>
+          <GuideItem name="الترقيم">كل موسم يبدأ ترقيم شكاواه من 1، مثل 1448-00001.</GuideItem>
+        </ul>
+      </div>
+
+      <div className="card">
+        <h2>تسلسل الشكوى</h2>
+        <p style={{ marginTop: 0 }}>للشكوى سبع حالات في مرحلتين، وكل انتقال يحدث تلقائياً دون أن يكتب الموظف الحالة بيده.</p>
+        <div className="flow">
+          <StatusBadge value="جديد" /><FlowStep label="فتح البطاقة" /><StatusBadge value="قيد المراجعة" />
+          <FlowStep label="أول جلسة" /><StatusBadge value="جاري المتابعة" /><FlowStep label="جلسة إغلاق" /><StatusBadge value="مغلقة" />
+        </div>
+        <div className="flow-label">↓ عند الاعتراض (مرة واحدة، بعد الإغلاق فقط)</div>
+        <div className="flow">
+          <StatusBadge value="قيد مراجعة الاعتراض" /><FlowStep label="جلسة" /><StatusBadge value="جاري متابعة الاعتراض" />
+          <FlowStep label="جلسة إغلاق" /><StatusBadge value="مغلقة بعد الاعتراض" />
+        </div>
+        <ul className="list" style={{ marginTop: 10 }}>
+          <GuideItem name="آخر جلسة تحدد الحالة والنتيجة">لا تُكتب الحالة ولا نتيجة الشكوى يدوياً، والجلسات تُعدَّل ولا تُحذف.</GuideItem>
+          <GuideItem name="جلسة الإغلاق">يُكتب فيها إلزامياً النص الذي يراه المشتكي في صفحة النتيجة.</GuideItem>
+          <GuideItem name="بعد الإغلاق النهائي">تُقفل الشكوى، ولا يبقى إلا تعديل الجلسات.</GuideItem>
+        </ul>
+      </div>
+
+      <div className="card">
+        <h2>الصفحات</h2>
+        <ul className="list">
+          <GuideItem name="📝 تقديم شكوى — للحاج">كلمة مرور عامة أو خاصة (4 أرقام لمرة واحدة)، أو التقديم المباشر إن فُعّل. النموذج ثلاث خطوات: بياناته وصفته، المشتكى عليه وصفته، الشكوى كتابةً أو بالصوت.</GuideItem>
+          <GuideItem name="🔎 نتيجة الشكوى — للمشتكي">برقم الشكوى ورمز المتابعة: الحالة والنص الموجّه له وتاريخ الإغلاق فقط.</GuideItem>
+          <GuideItem name="⚖️ الاعتراض — للمشتكى عليه">برقم الشكوى ورمز الاعتراض: يرى عنوان الشكوى فقط، ويعترض مرة واحدة ضمن المهلة (3 أيام افتراضياً).</GuideItem>
+          <GuideItem name="🛠️ لوحة الإدارة — للمدير والموظفين">متابعة الشكاوى والجلسات والقرارات.</GuideItem>
+          <GuideItem name="📊 التقارير — للإدارة العليا">أعداد الشكاوى حسب الموسم والفترة، وجدول للاطلاع فقط.</GuideItem>
+        </ul>
+      </div>
+
+      <div className="card">
+        <h2>أقسام لوحة الإدارة</h2>
+        <ul className="list">
+          <GuideItem name="📅 المطلوب اليوم">تنبيهات ذكية: شكوى جديدة لم تُراجع خلال 24 ساعة، إحالة بلا تحديث منذ يومين، شكوى مفتوحة منذ 7 أيام، ومواعيد المتابعة.</GuideItem>
+          <GuideItem name="📋 الشكاوى">تصفية بالموسم والحالة والتصنيف، بحث وفرز، وتفاصيل كل شكوى بجلساتها وإحالاتها واعتراضها.</GuideItem>
+          <GuideItem name="🗓️ الجلسات">جلسات اليوم والقادمة والسابقة؛ لكل جلسة عنوان وموضوع وإحالة ونتيجة.</GuideItem>
+          <GuideItem name="🔗 إرسال رابط">رسالة جاهزة للنسخ: رابط التقديم مع كلمة مرور تُولّد بضغطة.</GuideItem>
+          <GuideItem name="📑 القرارات الإدارية">رقم القرار وتاريخه وعنوانه وموضوعه ورابطه وتصنيفه، مع بحث متقدم وفرز.</GuideItem>
+          <GuideItem name="للمدير فقط">دخول المشتكين، كلمات مرور الإدارة، الموظفون، والإعدادات (الموسم، القوائم، قفل Excel، التصفير).</GuideItem>
+        </ul>
+      </div>
+
+      <div className="card">
+        <h2>الصلاحيات والحماية</h2>
+        <ul className="list">
+          <GuideItem name="صلاحيتان">المدير يرى كل شيء؛ الموظف يرى الأقسام الأساسية دون الإعدادات وكلمات المرور.</GuideItem>
+          <GuideItem name="ثلاث نتائج منفصلة">نتيجة داخلية للقسم والإدارة، ونص للمشتكي، ونص للمعترض.</GuideItem>
+          <GuideItem name="خصوصية المشتكي">المعترض لا يرى اسم المشتكي ولا رقمه.</GuideItem>
+          <GuideItem name="التصفير">يحتاج كلمة المدير ورمز تصفير خاصاً وكتابة كلمة «تصفير».</GuideItem>
+        </ul>
+      </div>
+
+      <div className="card">
+        <h2>التصدير</h2>
+        <ul className="list">
+          <GuideItem name="📄 ملف الشكوى (Word)">من تفاصيل أي شكوى: بالترويسة الرسمية، قابل للتعديل.</GuideItem>
+          <GuideItem name="📥 الجداول (Excel)">الشكاوى والجلسات والإحالات للموسم المختار، مقفولة للعرض فقط.</GuideItem>
+          <GuideItem name="📂 استعراض نسخة محفوظة">فتح أي ملف Excel سابق داخل المنصة للاطلاع، مع فرز وتصفية.</GuideItem>
+        </ul>
+      </div>
+
+      <div className="card">
+        <h2>التقنية والتكلفة</h2>
+        <p style={{ marginTop: 0 }}>المنصة تعمل بلا تكلفة: الصفحات على GitHub Pages، والبيانات على Supabase (الخطة المجانية)، ولا تحتاج تطبيقاً على الجوال.</p>
+        <ul className="list">
+          <GuideItem name="التحديثات">تظهر خلال دقائق، وقد تحتاج Ctrl+F5 على الحاسوب.</GuideItem>
+          <GuideItem name="قاعدة البيانات">تتوقف بعد أسبوع بلا استخدام، وروبوت GitHub ينبّهها يومياً.</GuideItem>
+        </ul>
+      </div>
+
+      {isManager && (
+        <div className="card">
+          <h2>خطوات متبقية قبل التشغيل الفعلي</h2>
+          <ul className="list">
+            <GuideItem name="١">تنفيذ الأقسام 26 ثم 28 ثم 29 من schema.sql في Supabase.</GuideItem>
+            <GuideItem name="٢">تغيير كلمة مرور المدير إلى كلمة طويلة.</GuideItem>
+            <GuideItem name="٣">تعيين رمز التصفير، وكلمة قفل ملفات Excel من «الإعدادات».</GuideItem>
+            <GuideItem name="٤">التأكد أن الموسم 1448، ثم تصفير المنصة لحذف الشكاوى التجريبية.</GuideItem>
+            <GuideItem name="٥">إضافة الموظفين، وكلمات مرور الإدارة العليا.</GuideItem>
+            <GuideItem name="٦">تجربة شكوى كاملة من جوال حتى تصدير ملف Word.</GuideItem>
+          </ul>
+        </div>
+      )}
+
+      <div className="card">
+        <h2>توصيات</h2>
+        <ul className="list">
+          <GuideItem name="يوم تدريب قبل الموسم">يقدّم كل موظف شكوى تجريبية ويتابعها حتى الإغلاق، ثم تُصفّر المنصة.</GuideItem>
+          <GuideItem name="أيقونة على الشاشة الرئيسية">تُضاف صفحة الإدارة إلى جوال كل موظف فتُفتح بضغطة.</GuideItem>
+          <GuideItem name="نسخة احتياطية أسبوعية">تصدير «كل الجداول» إلى Excel، وملف Word لكل شكوى تُغلق نهائياً.</GuideItem>
+          <GuideItem name="بعد انتهاء الموسم">إيقاف كلمات مرور الموظفين المؤقتين، وتغيير كلمة المدير، وبدء موسم 1449 من «الإعدادات».</GuideItem>
+        </ul>
+      </div>
     </div>
   );
 }

@@ -78,6 +78,7 @@
     2026-09-30  تنسيقات الشاشة الرئيسية للأدمن (.tile / .home-tiles / .section-bar).
     2026-09-30  تنسيقات خطوات نموذج الشكوى (.steps / .step-buttons).
     2026-09-30  لون حالة «مغلقة بعد الاعتراض» (.st-closedobj).
+    2026-09-30  تنسيقات دليل المنصة (.flow / .flow-step / .flow-label).
     2026-09-30  تنسيقات القرارات الإدارية (.adv-search / .dec-tag).
     2026-09-30  ألوان حالتي الاعتراض (.st-objreview / .st-objfollow)، وحقل العرض ومربع النتيجة وعلامة «بعد الاعتراض».
     2026-09-30  اعتماد لوحة ألوان الهوية: النصوص #333132 و#939598، العناوين والأزرار #00594f و#006e5c و#279e91،
@@ -380,6 +381,12 @@
   .obj-tag { display: inline-block; margin-inline-start: 6px; padding: 0 8px; border-radius: 999px; background: #fcebf2; color: #b8336a; font-size: 12.5px; font-weight: 800; }
   .locked-note { margin-top: 14px; padding: 10px 12px; border-radius: 10px; background: #eee9df; color: var(--ink); font-weight: 700; text-align: center; }
 
+  /* دليل المنصة: تسلسل الحالات (شارات وأسهم تلتف على الجوال) */
+  .flow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
+  .flow-step { display: inline-flex; flex-direction: column; align-items: center; color: var(--muted); line-height: 1.1; }
+  .flow-step small { font-size: 11.5px; }
+  .flow-label { margin: 12px 0 8px; font-weight: 700; color: #b8336a; font-size: 14px; }
+
   /* القرارات الإدارية: لوحة البحث المتقدم ووسم التصنيف */
   .adv-search { margin-bottom: 10px; background: #faf8f4; }
   .badge.dec-tag { background: #f3eedf; color: #7a6a3a; border: 1px solid var(--gold-light); }
@@ -529,6 +536,6 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4"></script>
 
 <!-- كود التطبيق جاهزاً (مولَّد من src/app.jsx بالأمر python build.py) -->
-<script src="app.js?v=46898fd5d1"></script>
+<script src="app.js?v=7cc968f132"></script>
 </body>
 </html>
