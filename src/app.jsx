@@ -11,6 +11,8 @@
 //    - قاعدة معتمدة: ملاحظة عربية قبل كل فقرة كود، وتصميم ثابت على الجوال.
 //  سجل التعديلات:
 //    2026-09-30  نقل الكود من main.html إلى هذا الملف، مع التحويل المسبق إلى app.js (build.py).
+//    2026-09-30  صفحة الأدمن: شاشة رئيسية بأزرار كبيرة وأعداد وبحث سريع، وكل قسم يُفتح وحده مع زر «🏠 الرئيسية»
+//                (وزر الرجوع في الجوال)؛ صلاحيتان «مدير» و«موظف» (admin_whoami)، وقسم «👥 الموظفون» للمدير.
 // =======================================================================
 // استيراد خطافات React المستخدمة في المكونات
 const { useState, useEffect, useCallback } = React;
@@ -765,16 +767,47 @@ const dueAlerts = (c, ref) => smartAlerts(c, ref).filter(a => a.level !== "later
 const alertWeight = alerts =>
   alerts.some(a => a.level === "danger") ? 0 : alerts.some(a => a.level === "warn") ? 1 : alerts.some(a => a.level === "info") ? 2 : 3;
 
-// التبويبات بعد الدخول: «المطلوب» أولاً، ثم الشكاوى، الجلسات، دخول المشتكين، وكلمات مرور الإدارة
+// أقسام صفحة الأدمن: المفتاح، العنوان، وهل هي للمدير فقط
+const SECTIONS = {
+  today:      { title: "📅 المطلوب" },
+  complaints: { title: "📋 الشكاوى" },
+  sessions:   { title: "🗓️ الجلسات" },
+  links:      { title: "🔗 إرسال رابط" },
+  access:     { title: "🔐 دخول المشتكين", manager: true },
+  viewers:    { title: "📊 كلمات مرور الإدارة", manager: true },
+  staff:      { title: "👥 الموظفون", manager: true },
+  settings:   { title: "⚙️ الإعدادات", manager: true },
+};
+
+// صفحة الأدمن: شاشة رئيسية بأزرار كبيرة، وكل قسم يُفتح وحده مع زر «🏠 الرئيسية» للعودة
+// (زر الرجوع في الجوال يعود أيضاً إلى الرئيسية). الموظف يرى الأقسام الأساسية فقط، والمدير يرى الكل
 function AdminPage({ secret }) {
-  // التبويب الحالي، الشكاوى (تُجلب مرة واحدة لكل التبويبات)، الشكوى المفتوحة في نافذة التفاصيل،
-  // ورقم نسخة الجلسات (يزيد عند إضافة/حذف جلسة فيُعاد جلب تبويب الجلسات)
-  const [tab, setTab] = useState("today");
+  // القسم الحالي (home = الشاشة الرئيسية)، الشكاوى (تُجلب مرة واحدة لكل الأقسام)، الشكوى المفتوحة،
+  // ورقم نسخة الجلسات (يزيد عند إضافة/تعديل جلسة فيُعاد جلب قسم الجلسات)
+  const [tab, setTab] = useState("home");
+  const [start, setStart] = useState({});      // بداية القسم: بحث أو تصفية مختارة من الرئيسية
   const [rows, setRows] = useState(null);
   const [error, setError] = useState("");
   const [openId, setOpenId] = useState(null);
   const [openFromDue, setOpenFromDue] = useState(false);   // فُتحت من «المطلوب» ← طلب تحديد التنبيه القادم
   const [sessVer, setSessVer] = useState(0);
+
+  // من الداخل؟ مدير أو موظف (قاعدة لم يُنفَّذ فيها القسم 24 ← مدير كما كان)
+  const [me, setMe] = useState(null);
+  useEffect(() => {
+    sb.rpc("admin_whoami", { p_secret: secret }).then(({ data, error }) => setMe(error || !data ? { role: "مدير", name: "" } : data));
+  }, [secret]);
+  const isManager = !me || me.role === "مدير";
+
+  // فتح قسم (مع حفظ خطوة في سجل المتصفح ليعود زر الرجوع إلى الرئيسية)، والعودة للرئيسية
+  const go = (key, opts = {}) => { setStart(opts); setTab(key); try { history.pushState({ adminTab: key }, "", location.hash); } catch {} };
+  const goHome = () => { if (history.state && history.state.adminTab) history.back(); else setTab("home"); };
+  useEffect(() => {
+    const onPop = () => setTab("home");
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
+
   // فتح شكوى: إن كانت «جديد» تتحول تلقائياً إلى «قيد المراجعة» (admin_open_complaint) قبل عرضها
   const openComplaint = async (c, fromDue = false) => {
     const row = (rows || []).find(r => r.id === c.id) || c;
@@ -816,31 +849,34 @@ function AdminPage({ secret }) {
   const reload = () => { setRows(null); load(); };
   const opened = (rows || []).find(r => r.id === openId);
 
-  // عدد الشكاوى المطلوبة اليوم لإظهاره على التبويب
-  const dueCount = (rows || []).filter(c => dueAlerts(c).length > 0).length;
+  // القسم المطلوب غير مسموح لهذا الدور ← الرئيسية
+  const section = SECTIONS[tab];
+  const allowed = tab === "home" || (section && (isManager || !section.manager));
 
-  // العرض: التبويبات، محتوى التبويب، ونافذة التفاصيل عند فتح شكوى
+  // العرض: الرئيسية أو القسم المفتوح (مع شريط العودة)، ونافذة التفاصيل عند فتح شكوى
+  if (!me) return <Loading />;
   return (
     <div>
-      <div className="tabs">
-        <button className={tab === "today" ? "active" : ""} onClick={() => setTab("today")}>
-          📅 المطلوب{dueCount > 0 && <span className="tab-count">{dueCount}</span>}
-        </button>
-        <button className={tab === "links" ? "active" : ""} onClick={() => setTab("links")}>🔗 الروابط</button>
-        <button className={tab === "complaints" ? "active" : ""} onClick={() => setTab("complaints")}>📋 الشكاوى</button>
-        <button className={tab === "sessions" ? "active" : ""} onClick={() => setTab("sessions")}>🗓️ الجلسات</button>
-        <button className={tab === "access" ? "active" : ""} onClick={() => setTab("access")}>🔐 دخول المشتكين</button>
-        <button className={tab === "viewers" ? "active" : ""} onClick={() => setTab("viewers")}>📊 كلمات مرور الإدارة</button>
-        <button className={tab === "settings" ? "active" : ""} onClick={() => setTab("settings")}>⚙️ الإعدادات</button>
-      </div>
       {error && <Alert type="error">{error}</Alert>}
-      {tab === "today" && <AdminDue secret={secret} rows={rows} onSaved={onSaved} reload={reload} onOpen={c => openComplaint(c, true)} />}
-      {tab === "links" && <AdminLinks secret={secret} />}
-      {tab === "complaints" && <AdminComplaints secret={secret} rows={rows} onSaved={onSaved} reload={reload} onOpen={c => openComplaint(c)} />}
-      {tab === "sessions" && <AdminSessions secret={secret} version={sessVer} onOpen={c => openComplaint(c)} />}
-      {tab === "access" && <AdminAccess secret={secret} />}
-      {tab === "viewers" && <AdminViewers secret={secret} />}
-      {tab === "settings" && <AdminSettings secret={secret} rows={rows} reload={reload} />}
+      {!allowed || tab === "home" ? (
+        <AdminHome me={me} isManager={isManager} rows={rows} go={go} />
+      ) : (
+        <>
+          <div className="section-bar">
+            <button type="button" className="btn secondary" onClick={goHome}>🏠 الرئيسية</button>
+            <h2>{section.title}</h2>
+          </div>
+          {tab === "today" && <AdminDue secret={secret} rows={rows} onSaved={onSaved} reload={reload} onOpen={c => openComplaint(c, true)} />}
+          {tab === "links" && <AdminLinks secret={secret} isManager={isManager} />}
+          {tab === "complaints" && <AdminComplaints secret={secret} rows={rows} onSaved={onSaved} reload={reload} onOpen={c => openComplaint(c)}
+                                     initialSearch={start.search || ""} initialFilter={start.filter || "الكل"} />}
+          {tab === "sessions" && <AdminSessions secret={secret} version={sessVer} onOpen={c => openComplaint(c)} />}
+          {tab === "access" && <AdminAccess secret={secret} />}
+          {tab === "viewers" && <AdminViewers secret={secret} />}
+          {tab === "staff" && <AdminStaff secret={secret} />}
+          {tab === "settings" && <AdminSettings secret={secret} rows={rows} reload={reload} />}
+        </>
+      )}
       {opened && (
         <div className="modal-back" onClick={() => setOpenId(null)}>
           <div className="modal" onClick={e => e.stopPropagation()}>
@@ -849,6 +885,131 @@ function AdminPage({ secret }) {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// الشاشة الرئيسية للأدمن: ترحيب، بحث سريع، وأزرار كبيرة بأعداد واضحة؛ أزرار المدير في قسم منفصل
+function AdminHome({ me, isManager, rows, go }) {
+  // نص البحث السريع
+  const [q, setQ] = useState("");
+
+  // الأعداد: المطلوب اليوم، الجديدة، والمفتوحة (كل ما لم يُغلق)
+  const list = rows || [];
+  const due = list.filter(c => dueAlerts(c).length > 0).length;
+  const fresh = list.filter(c => c.status === "جديد").length;
+  const open = list.filter(c => c.status !== CLOSED).length;
+
+  // زر كبير: أيقونة، عنوان، وعدد (اختياري) بلون
+  const Tile = ({ icon, title, count, tone, onClick, sub }) => (
+    <button type="button" className={`tile ${tone || ""}`} onClick={onClick}>
+      <span className="tile-icon">{icon}</span>
+      <span className="tile-title">{title}</span>
+      {count != null && <span className="tile-count">{rows ? count : "…"}</span>}
+      {sub && <span className="tile-sub">{sub}</span>}
+    </button>
+  );
+
+  // العرض: الترحيب، البحث، الأزرار الأساسية، ثم أزرار المدير
+  return (
+    <div>
+      <div className="home-hello">أهلاً{me.name ? ` ${me.name}` : ""} 👋 <span className="muted">· {isManager ? "مدير" : "موظف"}</span></div>
+      <form className="row home-search" style={{ flexWrap: "nowrap" }} onSubmit={e => { e.preventDefault(); go("complaints", { search: q.trim() }); }}>
+        <input type="search" value={q} onChange={e => setQ(e.target.value)} placeholder="🔍 ابحث برقم الشكوى أو الاسم أو الهاتف" />
+        <button className="btn">بحث</button>
+      </form>
+      <div className="home-tiles">
+        <Tile icon="📅" title="المطلوب اليوم" count={due} tone={due > 0 ? "hot" : "ok"} onClick={() => go("today")} sub={due > 0 ? "اضغط للمتابعة" : "لا شيء متأخر"} />
+        <Tile icon="🆕" title="شكاوى جديدة" count={fresh} tone={fresh > 0 ? "warm" : ""} onClick={() => go("complaints", { filter: "جديد" })} />
+        <Tile icon="📋" title="كل الشكاوى" count={open} sub="مفتوحة" onClick={() => go("complaints")} />
+        <Tile icon="🗓️" title="الجلسات" onClick={() => go("sessions")} />
+        <Tile icon="🔗" title="إرسال رابط" sub="لمشتكٍ أو للإدارة" onClick={() => go("links")} />
+      </div>
+      {isManager && (
+        <>
+          <div className="home-label">للمدير</div>
+          <div className="home-tiles small">
+            <Tile icon="🔐" title="دخول المشتكين" onClick={() => go("access")} />
+            <Tile icon="📊" title="كلمات مرور الإدارة" onClick={() => go("viewers")} />
+            <Tile icon="👥" title="الموظفون" onClick={() => go("staff")} />
+            <Tile icon="⚙️" title="الإعدادات" onClick={() => go("settings")} />
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// قسم الموظفين (للمدير): إضافة موظف بكلمة مرور خاصة، نسخ رسالته، وإيقافه أو تفعيله
+function AdminStaff({ secret }) {
+  // اسم الموظف الجديد، الكلمة المولّدة الأخيرة، القائمة، والرسائل
+  const [name, setName] = useState("");
+  const [created, setCreated] = useState(null);
+  const [list, setList] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+
+  // جلب الموظفين
+  const load = useCallback(async () => {
+    const { data, error } = await sb.rpc("admin_list_staff", { p_secret: secret });
+    if (error) { setList([]); return setMsg({ type: "error", text: "تعذّر الجلب (نفّذ القسم 24 من schema.sql في Supabase)." }); }
+    setList(data || []);
+  }, [secret]);
+  useEffect(() => { load(); }, [load]);
+
+  // إضافة موظف وتوليد كلمة مروره
+  async function create(e) {
+    e.preventDefault();
+    if (!name.trim()) return setMsg({ type: "error", text: "يرجى كتابة اسم الموظف." });
+    setBusy(true); setMsg(null);
+    const { data, error } = await sb.rpc("admin_create_staff", { p_secret: secret, p_name: name });
+    setBusy(false);
+    if (error || !data || !data.length) return setMsg({ type: "error", text: "تعذّر الإضافة، يرجى المحاولة مرة أخرى." });
+    setCreated(data[0]); setName(""); load();
+  }
+
+  // إيقاف موظف أو إعادة تفعيله
+  async function toggle(r) {
+    const { data } = await sb.rpc("admin_set_staff_active", { p_secret: secret, p_id: r.id, p_active: !r.active });
+    if (data) load();
+  }
+
+  // رسالة الموظف: الرابط وكلمة مروره
+  const text = r => `رابط لوحة قسم الشكاوى — إدارة الحج والعمرة:\n${siteUrl()}#/admin\nكلمة المرور الخاصة بك: ${r.code}`;
+
+  // العرض: شرح الصلاحية، نموذج الإضافة، الكلمة الجديدة وزر النسخ، ثم القائمة
+  return (
+    <div>
+      <form className="card" onSubmit={create}>
+        <h2>إضافة موظف</h2>
+        <p className="muted" style={{ fontSize: 14, marginTop: 0 }}>الموظف يرى: المطلوب، الشكاوى، الجلسات، وإرسال رابط للمشتكي. لا يرى الإعدادات ولا كلمات المرور.</p>
+        {msg && <Alert type={msg.type}>{msg.text}</Alert>}
+        <Field label="اسم الموظف"><input type="text" value={name} onChange={e => setName(e.target.value)} maxLength={200} /></Field>
+        <button className="btn gold block" style={{ marginTop: 14 }} disabled={busy}>{busy ? "جارٍ الإضافة…" : "👥 إضافة وتوليد كلمة مرور"}</button>
+        {created && (
+          <div style={{ marginTop: 16 }}>
+            <div className="muted center">كلمة مرور {created.name}</div>
+            <div className="big-code">{created.code}</div>
+            <button type="button" className="btn secondary block" onClick={async () => setMsg(await copyText(text(created)) ? { type: "ok", text: "تم نسخ الرسالة." } : { type: "error", text: "تعذّر النسخ." })}>📋 نسخ الرسالة</button>
+          </div>
+        )}
+      </form>
+      <div className="card">
+        <h2>الموظفون</h2>
+        {list === null ? <Loading /> : list.length === 0 ? <p className="muted">لم تُضف أي موظف بعد.</p> : (
+          <ul className="list">
+            {list.map(r => (
+              <li key={r.id}>
+                <div>
+                  <b>{r.name}</b> · <span className="mono">{r.code}</span>
+                  <div className="muted" style={{ fontSize: 13 }}>آخر دخول: {fmtDateTime(r.last_seen_at)}</div>
+                </div>
+                <button className={`btn sm ${r.active ? "secondary" : ""}`} onClick={() => toggle(r)}>{r.active ? "إيقاف" : "تفعيل"}</button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
     </div>
   );
 }
@@ -1545,10 +1706,10 @@ function ExcelViewer({ onClose }) {
 }
 
 // تبويب الشكاوى: تصفية بالحالة وبحث، ثم جدول الشكاوى
-function AdminComplaints({ secret, rows, onSaved, reload, onOpen }) {
-  // التصفية والبحث، وحالة التصدير الكامل
-  const [filter, setFilter] = useState("الكل");
-  const [search, setSearch] = useState("");
+function AdminComplaints({ secret, rows, onSaved, reload, onOpen, initialSearch = "", initialFilter = "الكل" }) {
+  // التصفية والبحث (قد يبدآن بقيمة من الرئيسية)، وحالة التصدير الكامل
+  const [filter, setFilter] = useState(initialFilter);
+  const [search, setSearch] = useState(initialSearch);
   const [exporting, setExporting] = useState(false);
   const [exportErr, setExportErr] = useState("");
   const [viewing, setViewing] = useState(false);   // نافذة استعراض نسخة محفوظة
@@ -2079,7 +2240,7 @@ function AdminSessions({ secret, version, onOpen }) {
 //   مشتكٍ ← الرابط + كلمة المرور (خاصة تُولَّد بضغطة، أو العامة المحفوظة)
 //   الإدارة ← رابط التقارير + كلمة مرور الشخص المختار
 // ---------------------------------------------------------------------
-function AdminLinks({ secret }) {
+function AdminLinks({ secret, isManager = true }) {
   // إعدادات الدخول، أصحاب كلمات مرور الإدارة، ملاحظة المشتكي، الشخص المختار، الرسالة الجاهزة، والحالة
   const [access, setAccess] = useState(null);
   const [viewers, setViewers] = useState(null);
@@ -2095,8 +2256,8 @@ function AdminLinks({ secret }) {
       if (error || !data || !data.length) return setErr(NET_ERR);
       setAccess(data[0]);
     });
-    sb.rpc("admin_list_viewers", { p_secret: secret }).then(({ data }) => setViewers((data || []).filter(v => v.active)));
-  }, [secret]);
+    if (isManager) sb.rpc("admin_list_viewers", { p_secret: secret }).then(({ data }) => setViewers((data || []).filter(v => v.active)));
+  }, [secret, isManager]);
 
   // تجهيز الرسالة: تظهر في مربع أعلى الصفحة (مع الصعود إليه)، وتُنسخ مباشرة
   // (وإن منع المتصفح النسخ يبقى زر «نسخ مرة أخرى» في المربع)
@@ -2169,10 +2330,10 @@ function AdminLinks({ secret }) {
         </button>
       </div>
 
-      <div className="card">
+      {isManager && <div className="card">
         <h2>🏢 تواصلت معي الإدارة (رابط التقارير)</h2>
         {viewers === null ? <Loading /> : viewers.length === 0 ? (
-          <p className="muted">لا توجد كلمات مرور إدارة فعّالة. أضف الشخص أولاً من تبويب «كلمات مرور الإدارة».</p>
+          <p className="muted">لا توجد كلمات مرور إدارة فعّالة. أضف الشخص أولاً من «كلمات مرور الإدارة» في الرئيسية.</p>
         ) : (
           <>
             <Field label="الشخص">
@@ -2184,7 +2345,7 @@ function AdminLinks({ secret }) {
             <button type="button" className="btn gold block" style={{ marginTop: 12 }} onClick={forViewer}>📋 نسخ رابط التقارير مع كلمة المرور</button>
           </>
         )}
-      </div>
+      </div>}
 
       <div className="card">
         <h2>🔗 روابط المنصة</h2>

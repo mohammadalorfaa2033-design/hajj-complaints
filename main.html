@@ -75,6 +75,7 @@
                 مع صفحات، وبطاقة لكل صف (بكل الحقول، مع السابق/التالي).
     2026-09-30  السرعة: نقل كود التطبيق إلى src/app.jsx وتحويله مسبقاً إلى app.js (build.py)، وحذف مكتبة
                 Babel من الصفحة — لم يعد الجوال يحوّل الكود عند كل فتح. التعديلات القادمة تُسجَّل في src/app.jsx.
+    2026-09-30  تنسيقات الشاشة الرئيسية للأدمن (.tile / .home-tiles / .section-bar).
 =======================================================================
 -->
 <html lang="ar" dir="rtl">
@@ -348,6 +349,30 @@
   .list-items { list-style: none; margin: 12px 0 0; padding: 0; }
   .list-items li { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 9px; margin-bottom: 6px; background: #fafbf9; }
 
+  /* الشاشة الرئيسية للأدمن: ترحيب، بحث، وأزرار كبيرة بأعداد */
+  .home-hello { font-size: 18px; font-weight: 800; margin: 4px 0 12px; }
+  .home-search { margin-bottom: 14px; }
+  .home-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+  .home-tiles.small .tile { min-height: 96px; }
+  .home-label { margin: 22px 0 8px; font-weight: 800; color: var(--muted); font-size: 14px; }
+  .tile { position: relative; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; min-height: 120px; padding: 16px;
+          border: 1px solid var(--line); border-radius: 16px; background: var(--card); box-shadow: var(--shadow); cursor: pointer;
+          font: inherit; text-align: start; color: var(--ink); transition: transform .08s; }
+  .tile:active { transform: scale(.97); }
+  .tile-icon { font-size: 30px; line-height: 1; }
+  .tile-title { font-size: 16.5px; font-weight: 800; }
+  .tile-sub { font-size: 13px; color: var(--muted); }
+  .tile-count { position: absolute; top: 12px; inset-inline-end: 12px; min-width: 34px; padding: 2px 10px; border-radius: 999px;
+                background: #eef2ee; font-size: 18px; font-weight: 800; text-align: center; }
+  .tile.hot { border-color: #f1b5b0; background: linear-gradient(180deg, #fff5f4, #fff); }
+  .tile.hot .tile-count { background: var(--danger); color: #fff; }
+  .tile.warm { border-color: #f3c99a; background: linear-gradient(180deg, #fff8ef, #fff); }
+  .tile.warm .tile-count { background: #e08a1e; color: #fff; }
+  .tile.ok .tile-count { background: #d9f0e1; color: #1d6b3c; }
+  /* شريط أعلى القسم المفتوح: زر الرئيسية وعنوان القسم */
+  .section-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+  .section-bar h2 { margin: 0; font-size: 19px; }
+
   /* سطر اختيار الموسم فوق جدول الشكاوى */
   .season-row { margin-bottom: 10px; align-items: center; }
   .season-row select { width: auto; min-width: 170px; }
@@ -466,6 +491,6 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4"></script>
 
 <!-- كود التطبيق جاهزاً (مولَّد من src/app.jsx بالأمر python build.py) -->
-<script src="app.js?v=6f11020ddf"></script>
+<script src="app.js?v=08b1ca117d"></script>
 </body>
 </html>

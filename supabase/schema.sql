@@ -57,6 +57,8 @@
 --    2026-09-30  القسم 22: كلمة مرور قفل ملفات Excel (admin_get_excel_lock / admin_set_excel_lock).
 --    2026-09-30  القسم 23: صفة المشتكي وصفة المشتكى عليه؛ عنوان الجلسة وموضوعها؛ قائمتا التصنيفات والصفات
 --                يعدّلهما الأدمن؛ إلغاء سجل الشكوى وسجل الإحالة (حذف complaint_log)؛ سبب التمديد في الشكوى.
+--    2026-09-30  القسم 24: صلاحيتان «مدير» و«موظف» (admin_whoami، كلمات مرور الموظفين، دوال المدير فقط).
+--    2026-09-30  القسم الأخير: إعادة القيمة المثالية لكلمة مرور الأدمن الأولى (المستودع عام).
 -- =====================================================================
 
 -- ---------------------------------------------------------------------
@@ -161,6 +163,10 @@ drop function if exists public.admin_set_excel_lock(text, text);
 drop function if exists public.get_form_lists();
 drop function if exists public.admin_get_lists(text);
 drop function if exists public.admin_set_list(text, text, text[]);
+drop function if exists public.admin_whoami(text);
+drop function if exists public.admin_create_staff(text, text);
+drop function if exists public.admin_list_staff(text);
+drop function if exists public.admin_set_staff_active(text, uuid, boolean);
 drop function if exists public.submit_complaint(text, text, text, text, text, text, text, text, text);
 drop function if exists public.admin_add_session(text, uuid, timestamptz, text, text, text, text, text);
 drop function if exists public.admin_update_session(text, uuid, timestamptz, text, text, text, text, text);
@@ -2311,7 +2317,133 @@ grant execute on function public.viewer_complaint_card(text, text)              
 grant execute on function public.viewer_report(text, timestamptz, timestamptz, text)                 to anon, authenticated;
 
 -- ---------------------------------------------------------------------
--- 24) كلمة مرور الأدمن الأولى — غيّر 'غيّرني-123' قبل التنفيذ (6 أحرف على الأقل)
+-- 24) صلاحيتان في صفحة الأدمن: «مدير» و«موظف»
+--     - كلمة مرور بدور «أدمن» = مدير (كل شيء)
+--     - كلمة مرور بدور «موظف» = الشكاوى والمطلوب والجلسات والروابط فقط
+--       (لا: إعدادات الدخول، كلمات مرور الإدارة والموظفين، الموسم، القوائم، قفل Excel، التصفير)
+--     - verify_password('أدمن', …) يقبل المدير والموظف، و verify_password('مدير', …) يقبل المدير فقط
+--     يُنفَّذ وحده أيضاً كتحديث لقاعدة موجودة (لا يحذف بيانات)
+-- ---------------------------------------------------------------------
+-- السماح بالدور الجديد «موظف» في جدول كلمات المرور
+alter table public.access_passwords drop constraint if exists access_passwords_role_check;
+alter table public.access_passwords add constraint access_passwords_role_check
+  check (role in ('أدمن', 'موظف', 'إدارة', 'مشتكي'));
+
+-- التحقق من كلمة المرور: «أدمن» = مدير أو موظف، «مدير» = المدير فقط، وغيرها كما هي
+create or replace function public.verify_password(p_role text, p_password text)
+returns uuid
+language plpgsql security definer set search_path = public as $$
+declare
+  v_pw    text := translate(btrim(coalesce(p_password, '')), '٠١٢٣٤٥٦٧٨٩', '0123456789');
+  v_roles text[] := case p_role when 'أدمن' then array['أدمن', 'موظف'] when 'مدير' then array['أدمن'] else array[p_role] end;
+  v_id    uuid;
+  v_name  text;
+begin
+  if public.ip_locked() then
+    return null;
+  end if;
+  if p_role = 'إدارة' then
+    v_pw := upper(v_pw);
+  end if;
+  update public.access_passwords
+     set last_seen_at = now()
+   where role = any (v_roles) and password = v_pw and active and used_at is null
+  returning id, holder_name into v_id, v_name;
+  if v_id is not null then
+    perform set_config('app.actor', coalesce(v_name, p_role), true);
+  end if;
+  return v_id;
+end $$;
+
+-- من الداخل؟ تُرجع {role: 'مدير' أو 'موظف', name} أو null
+create or replace function public.admin_whoami(p_secret text)
+returns json
+language plpgsql security definer set search_path = public as $$
+declare
+  v_id uuid := public.verify_password('أدمن', p_secret);
+begin
+  if v_id is null then
+    return null;
+  end if;
+  return (select json_build_object('role', case when role = 'أدمن' then 'مدير' else 'موظف' end, 'name', holder_name)
+          from public.access_passwords where id = v_id);
+end $$;
+
+-- الدوال الخاصة بالمدير: تُعاد كتابتها تلقائياً لتقبل المدير فقط (بدل المدير والموظف)
+do $$
+declare
+  f record;
+begin
+  for f in
+    select p.oid from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public' and p.proname = any (array[
+      'admin_set_access', 'admin_list_codes', 'admin_delete_code',
+      'admin_create_viewer', 'admin_list_viewers', 'admin_set_viewer_active',
+      'admin_get_report_card', 'admin_set_report_card',
+      'admin_set_season', 'admin_set_excel_lock', 'admin_set_list', 'admin_reset_platform'])
+  loop
+    execute replace(pg_get_functiondef(f.oid), 'verify_password(''أدمن''', 'verify_password(''مدير''');
+  end loop;
+end $$;
+
+-- كلمات مرور الموظفين (للمدير فقط): إضافة موظف بكلمة مرور من 8 أحرف وأرقام
+create or replace function public.admin_create_staff(p_secret text, p_name text)
+returns table (id uuid, name text, code text)
+language plpgsql security definer set search_path = public as $$
+declare
+  v_code text;
+begin
+  if public.verify_password('مدير', p_secret) is null then
+    return;
+  end if;
+  if coalesce(btrim(p_name), '') = '' then
+    raise exception 'يرجى كتابة اسم الموظف';
+  end if;
+  loop
+    v_code := public.random_password(8, false);
+    exit when not exists (select 1 from public.access_passwords a where a.password = v_code);
+  end loop;
+  insert into public.access_passwords as a (role, password, holder_name)
+  values ('موظف', v_code, btrim(left(p_name, 200)))
+  returning a.id, a.holder_name, a.password into id, name, code;
+  return next;
+end $$;
+
+-- قائمة الموظفين (للمدير فقط)
+create or replace function public.admin_list_staff(p_secret text)
+returns table (id uuid, name text, code text, active boolean, created_at timestamptz, last_seen_at timestamptz)
+language plpgsql security definer set search_path = public as $$
+begin
+  if public.verify_password('مدير', p_secret) is null then
+    return;
+  end if;
+  return query
+    select a.id, a.holder_name, a.password, a.active, a.created_at, a.last_seen_at
+    from public.access_passwords a
+    where a.role = 'موظف'
+    order by a.created_at desc;
+end $$;
+
+-- إيقاف موظف أو إعادة تفعيله (للمدير فقط)
+create or replace function public.admin_set_staff_active(p_secret text, p_id uuid, p_active boolean)
+returns boolean
+language plpgsql security definer set search_path = public as $$
+begin
+  if public.verify_password('مدير', p_secret) is null then
+    return false;
+  end if;
+  update public.access_passwords set active = p_active where id = p_id and role = 'موظف';
+  return found;
+end $$;
+
+-- السماح للموقع باستدعاء الدوال الجديدة
+grant execute on function public.admin_whoami(text)                          to anon, authenticated;
+grant execute on function public.admin_create_staff(text, text)              to anon, authenticated;
+grant execute on function public.admin_list_staff(text)                      to anon, authenticated;
+grant execute on function public.admin_set_staff_active(text, uuid, boolean) to anon, authenticated;
+
+-- ---------------------------------------------------------------------
+-- 25) كلمة مرور الأدمن الأولى — غيّر 'غيّرني-123' قبل التنفيذ (6 أحرف على الأقل)
 -- ---------------------------------------------------------------------
 insert into public.access_passwords (role, password, holder_name)
-values ('أدمن', '12345', 'المدير');
+values ('أدمن', 'غيّرني-123', 'المدير');
