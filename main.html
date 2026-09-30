@@ -18,6 +18,7 @@
     4) التقارير (‎#/reports): بكلمة مرور الإدارة — أعداد الشكاوى خلال فترة وجدول بحالاتها.
 
   ملاحظات:
+    - رقم الشكوى: الموسم-الرقم (1448-00001)؛ الموسم الحالي يُحدَّد من تبويب «الإعدادات».
     - الحالات: جديد / قيد المراجعة / جاري المتابعة / مغلقة (تُستخدم أسماء لاتينية للألوان: new/review/follow/closed).
     - الموقع لا يقرأ الجداول مباشرة؛ كل العمليات عبر دوال Supabase تتحقق من المدخلات داخلها.
     - كلمتا الأدمن والإدارة تُحفظان في sessionStorage (وفي localStorage إن اختير «تذكّرني»)؛ شكاوى المشتكي (الرقم + الرمز) في localStorage.
@@ -61,6 +62,9 @@
                 تلقائياً على الجوال ويعرض النص أثناء الكلام؛ تبويب «⚙️ الإعدادات» لتصفير المنصة برمز تصفير خاص.
     2026-09-30  تبويب «🔗 الروابط»: كل روابط المنصة في مكان واحد، وزر يولّد كلمة مرور للمشتكي وينسخ رسالتها
                 (أو الكلمة العامة)، وزر ينسخ رابط التقارير مع كلمة مرور الشخص المختار من الإدارة.
+    2026-09-30  المواسم: رقم الشكوى = الموسم-الرقم (1448-00001) ويبدأ من 1 في كل موسم؛ بطاقة «الموسم» في
+                «الإعدادات» لبدء موسم جديد؛ اختيار الموسم فوق جدول الشكاوى وفي التقارير (افتراضياً الحالي)؛
+                عمود «الموسم» في ملفات Excel، والتصدير الكامل يخص الموسم المختار.
 =======================================================================
 -->
 <html lang="ar" dir="rtl">
@@ -311,6 +315,10 @@
   .danger-zone { border: 2px solid #f1b5b0; background: #fff8f7; }
   .danger-zone h2 { color: var(--danger); }
 
+  /* سطر اختيار الموسم فوق جدول الشكاوى */
+  .season-row { margin-bottom: 10px; align-items: center; }
+  .season-row select { width: auto; min-width: 170px; }
+
   /* تبويب الروابط: مربع الرسالة الجاهزة (أخضر فاتح)، والرابط الطويل يلتف بدل أن يوسّع الصفحة */
   .ready-msg { background: #f0f8f3; border: 2px solid #9fd3b1; }
   .ready-msg textarea { width: 100%; font-size: 16px; direction: rtl; resize: vertical; }
@@ -516,20 +524,23 @@ async function exportAllToExcel(secret, complaints) {
     sb.rpc("admin_export_log", { p_secret: secret }),
   ]);
   if (s.error || l.error) throw new Error(NET_ERR);
-  const log = l.data || [];
+  // الجلسات والسجل: فقط ما يخص الشكاوى المصدَّرة (الموسم المختار)
+  const nums = new Set(complaints.map(c => c.complaint_number));
+  const log = (l.data || []).filter(x => nums.has(x.complaint_number));
+  const sess = (s.data || []).filter(x => nums.has(x.complaint_number));
   await saveWorkbook([
     { name: "الشكاوى",
-      headers: ["رقم الشكوى", "تاريخ الشكوى", "الحالة", "عنوان الاعتراض", "المشتكي", "رقم الهاتف", "واتس / تلغرام", "المشتكى عليه",
+      headers: ["الموسم", "رقم الشكوى", "تاريخ الشكوى", "الحالة", "عنوان الاعتراض", "المشتكي", "رقم الهاتف", "واتس / تلغرام", "المشتكى عليه",
                 "نص الشكوى", "التصنيف", "مُحالة إلى", "نتيجة الشكوى", "النتيجة للمشتكي", "النتيجة للمعترض", "تاريخ الإغلاق", "رمز المتابعة", "تنبيه المتابعة", "المطلوب عند التنبيه",
                 "ملخص للمشتكى عليه", "آخر موعد للاعتراض", "نص الاعتراض", "تاريخ الاعتراض", "آخر تعديل"],
-      rows: complaints.map(c => [c.complaint_number, xlDate(c.received_date), c.status, c.title, c.complainant_name, c.phone_number,
+      rows: complaints.map(c => [c.season, c.complaint_number, xlDate(c.received_date), c.status, c.title, c.complainant_name, c.phone_number,
                 c.contact_number, c.accused_name, c.subject, c.classification, c.referred_to, c.result, c.complainant_result, c.accused_result,
                 xlDate(c.closed_date), c.tracking_code,
                 xlDate(c.reminder_at), c.reminder_note, c.objection_summary, xlDate(c.objection_deadline), c.objection_text,
                 xlDate(c.objection_at), xlDate(c.updated_at)]) },
     { name: "الجلسات",
       headers: ["رقم الشكوى", "المشتكي", "تاريخ ووقت الجلسة", "مُحالة إلى", "نتيجة الجلسة", "حالة الشكوى"],
-      rows: (s.data || []).map(x => [x.complaint_number, x.complainant_name, xlDate(x.session_at), x.referred_to, x.result, x.status]) },
+      rows: sess.map(x => [x.complaint_number, x.complainant_name, xlDate(x.session_at), x.referred_to, x.result, x.status]) },
     { name: "سجل الشكاوى",
       headers: ["رقم الشكوى", "الوقت", "الحدث", "القيمة السابقة", "القيمة الجديدة", "بواسطة", "المصدر", "ملاحظة"],
       rows: log.map(x => [x.complaint_number, xlDate(x.at), x.event, x.old_value, x.new_value, x.actor, x.source, x.note]) },
@@ -942,7 +953,7 @@ function ResultPage() {
         <h2>البحث برقم الشكوى</h2>
         {error && <Alert type="error">{error}</Alert>}
         <div className="grid">
-          <Field label="رقم الشكوى" hint="مثال: 2026-00001"><input type="text" dir="ltr" value={number} onChange={e => setNumber(e.target.value)} maxLength={30} /></Field>
+          <Field label="رقم الشكوى" hint="مثال: 1448-00001"><input type="text" dir="ltr" value={number} onChange={e => setNumber(e.target.value)} maxLength={30} /></Field>
           <Field label="رمز المتابعة" hint="6 أرقام"><input type="text" inputMode="numeric" dir="ltr" value={code} onChange={e => setCode(e.target.value)} maxLength={6} /></Field>
         </div>
         <button className="btn block" style={{ marginTop: 14 }} disabled={busy}>{busy ? "جارٍ البحث…" : "عرض النتيجة"}</button>
@@ -1014,7 +1025,7 @@ function ObjectionPage() {
         <form className="card" onSubmit={open} noValidate>
           {error && <Alert type="error">{error}</Alert>}
           <div className="grid">
-            <Field label="رقم الشكوى" hint="مثال: 2026-00001"><input type="text" dir="ltr" value={number} onChange={e => setNumber(e.target.value)} maxLength={30} /></Field>
+            <Field label="رقم الشكوى" hint="مثال: 1448-00001"><input type="text" dir="ltr" value={number} onChange={e => setNumber(e.target.value)} maxLength={30} /></Field>
             <Field label="رمز الاعتراض" hint="6 أرقام"><input type="text" inputMode="numeric" dir="ltr" value={code} onChange={e => setCode(e.target.value)} maxLength={6} /></Field>
           </div>
           <button className="btn block" style={{ marginTop: 14 }} disabled={busy}>{busy ? "جارٍ التحقق…" : "عرض الشكوى"}</button>
@@ -1511,12 +1522,14 @@ function AdminSettings({ secret, rows, reload }) {
     if (data === "NO_CODE") return setMsg({ type: "error", text: "لم يُعيَّن رمز التصفير بعد. عيّنه من Supabase ← SQL Editor بالأمر: select public.set_reset_code('رمزك');" });
     if (data !== "OK") return setMsg({ type: "error", text: "رمز التصفير غير صحيح." });
     setCode(""); setConfirm("");
-    setMsg({ type: "ok", text: "✅ تم تصفير المنصة. الشكوى القادمة تبدأ بالرقم " + new Date().getFullYear() + "-00001." });
+    setMsg({ type: "ok", text: "✅ تم تصفير المنصة. الشكوى القادمة تبدأ من الرقم 00001 في الموسم الحالي." });
     reload();
   }
 
-  // العرض: بطاقة حمراء تحذيرية بما سيُحذف وما يبقى، ثم زر النسخة الاحتياطية والخانات
+  // العرض: بطاقة الموسم، ثم بطاقة حمراء تحذيرية بما سيُحذف وما يبقى، وزر النسخة الاحتياطية والخانات
   return (
+    <div>
+    <SeasonCard secret={secret} reload={reload} />
     <div className="card danger-zone">
       <h2>⚠️ تصفير المنصة</h2>
       <ul>
@@ -1545,6 +1558,65 @@ function AdminSettings({ secret, rows, reload }) {
         {busy ? "جارٍ التنفيذ…" : "🗑️ تصفير المنصة نهائياً"}
       </button>
     </div>
+    </div>
+  );
+}
+
+// بطاقة الموسم: الموسم الحالي (تُرقَّم به الشكاوى الجديدة من 1)، وبدء موسم جديد، وعدد شكاوى كل موسم
+function SeasonCard({ secret, reload }) {
+  // بيانات المواسم من الخادم، الموسم المكتوب، وحالة الحفظ والرسائل
+  const [info, setInfo] = useState(null);
+  const [value, setValue] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+
+  // جلب الموسم الحالي وقائمة المواسم
+  const load = useCallback(async () => {
+    const { data, error } = await sb.rpc("admin_get_season", { p_secret: secret });
+    if (error || !data) return setMsg({ type: "error", text: "تعذّر جلب المواسم (نفّذ القسم 21 من schema.sql في Supabase)." });
+    setInfo(data); setValue(data.current || "");
+  }, [secret]);
+  useEffect(() => { load(); }, [load]);
+
+  // حفظ الموسم الجديد بعد التأكيد
+  async function save() {
+    const v = value.trim();
+    if (!/^\d{4}$/.test(v)) return setMsg({ type: "error", text: "اكتب الموسم بأربعة أرقام، مثل 1449." });
+    if (!window.confirm(`تغيير الموسم الحالي إلى ${v}؟ الشكاوى الجديدة ستُرقَّم ${v}-00001، ${v}-00002 …`)) return;
+    setBusy(true); setMsg(null);
+    const { data, error } = await sb.rpc("admin_set_season", { p_secret: secret, p_season: v });
+    setBusy(false);
+    if (error || data !== "OK") return setMsg({ type: "error", text: "تعذّر الحفظ، يرجى المحاولة مرة أخرى." });
+    setMsg({ type: "ok", text: `✅ الموسم الحالي الآن ${v}.` });
+    load(); reload();
+  }
+
+  // العرض: الموسم الحالي بخط كبير، خانة التغيير، ثم قائمة المواسم وأعدادها
+  return (
+    <div className="card">
+      <h2>🕋 الموسم</h2>
+      {msg && <Alert type={msg.type}>{msg.text}</Alert>}
+      {info === null ? (!msg && <Loading />) : (
+        <>
+          <div className="muted center">الموسم الحالي</div>
+          <div className="big-code">{info.current || "—"}</div>
+          <p className="muted" style={{ fontSize: 14 }}>كل موسم يبدأ ترقيم شكاواه من 1، مثل {info.current || "1448"}-00001. الشكاوى السابقة تبقى بأرقامها.</p>
+          <Field label="بدء موسم جديد" hint="4 أرقام، مثل 1449">
+            <div className="row" style={{ flexWrap: "nowrap" }}>
+              <input type="text" inputMode="numeric" dir="ltr" className="grow" value={value} onChange={e => setValue(e.target.value)} maxLength={4} />
+              <button type="button" className="btn gold" disabled={busy || value.trim() === info.current} onClick={save}>{busy ? "جارٍ الحفظ…" : "حفظ"}</button>
+            </div>
+          </Field>
+          {info.seasons.length > 0 && (
+            <ul className="list" style={{ marginTop: 10 }}>
+              {info.seasons.map(x => (
+                <li key={x.season}><b>موسم {x.season}{x.season === info.current && <span className="muted"> · الحالي</span>}</b><span className="muted">{x.total} شكوى</span></li>
+              ))}
+            </ul>
+          )}
+        </>
+      )}
+    </div>
   );
 }
 
@@ -1556,24 +1628,42 @@ function AdminComplaints({ secret, rows, onSaved, reload, onOpen }) {
   const [exporting, setExporting] = useState(false);
   const [exportErr, setExportErr] = useState("");
 
+  // الموسم المعروض: يبدأ بالموسم الحالي من الإعدادات ("" = كل المواسم)
+  const [season, setSeason] = useState("");
+  const [current, setCurrent] = useState("");
+  useEffect(() => {
+    sb.rpc("admin_get_season", { p_secret: secret }).then(({ data }) => { if (data && data.current) { setCurrent(data.current); setSeason(data.current); } });
+  }, [secret]);
+  const seasons = [...new Set([current, ...(rows || []).map(c => c.season)].filter(Boolean))].sort().reverse();
+  const inSeason = (rows || []).filter(c => !season || c.season === season);
+
   // تصدير كل الجداول (الشكاوى، الجلسات، السجل، الإحالة) إلى ملف Excel واحد
   async function exportAll() {
     setExporting(true); setExportErr("");
-    try { await exportAllToExcel(secret, rows || []); }
+    try { await exportAllToExcel(secret, inSeason); }
     catch (e) { setExportErr(e.message || NET_ERR); }
     setExporting(false);
   }
 
   // التصفية بالحالة ونص البحث (الرقم، الأسماء، الموضوع، الرموز)
   const term = search.trim();
-  const visible = (rows || []).filter(c =>
+  const visible = inSeason.filter(c =>
     (filter === "الكل" || c.status === filter) &&
     (!term || [c.complaint_number, c.title, c.complainant_name, c.phone_number, c.contact_number, c.accused_name, c.subject, c.tracking_code, c.access_code, c.referred_to].some(v => (v || "").includes(term))));
-  const count = s => (rows || []).filter(c => s === "الكل" || c.status === s).length;
+  const count = s => inSeason.filter(c => s === "الكل" || c.status === s).length;
 
   // العرض: أزرار التصفية مع الأعداد، البحث، ثم الجدول
   return (
     <div>
+      {seasons.length > 0 && (
+        <div className="row season-row">
+          <span className="field-label">الموسم</span>
+          <select value={season} onChange={e => setSeason(e.target.value)}>
+            <option value="">كل المواسم</option>
+            {seasons.map(x => <option key={x} value={x}>موسم {x}{x === current ? " (الحالي)" : ""}</option>)}
+          </select>
+        </div>
+      )}
       <div className="chips">
         {["الكل", ...STATUSES].map(s => (
           <button key={s} className={filter === s ? "active" : ""} onClick={() => setFilter(s)}>{s} ({count(s)})</button>
@@ -1582,7 +1672,7 @@ function AdminComplaints({ secret, rows, onSaved, reload, onOpen }) {
       <div className="row" style={{ marginBottom: 12 }}>
         <input className="grow" type="text" placeholder="بحث بالرقم أو الاسم أو الهاتف أو الموضوع أو الجهة…" value={search} onChange={e => setSearch(e.target.value)} />
         <button className="btn secondary" onClick={reload}>🔄 تحديث</button>
-        <button className="btn gold" disabled={exporting || !rows} onClick={exportAll} title="الشكاوى + الجلسات + سجل الشكاوى + سجل الإحالة">{exporting ? "جارٍ التصدير…" : "📥 تصدير كل الجداول (Excel)"}</button>
+        <button className="btn gold" disabled={exporting || !rows} onClick={exportAll} title="الشكاوى + الجلسات + سجل الشكاوى + سجل الإحالة (للموسم المختار)">{exporting ? "جارٍ التصدير…" : "📥 تصدير كل الجداول (Excel)"}</button>
       </div>
       {exportErr && <Alert type="error">{exportErr}</Alert>}
       {rows === null ? <Loading /> : <ComplaintsTable secret={secret} rows={visible} onSaved={onSaved} onOpen={onOpen} />}
@@ -2531,7 +2621,16 @@ function ReportCardSwitch({ secret }) {
 function ReportsPage({ code, viewerName }) {
   // الفترة (افتراضياً من أول الشهر حتى اليوم)، البيانات، والخطأ
   const now = new Date();
-  const [range, setRange] = useState({ from: toDateInput(new Date(now.getFullYear(), now.getMonth(), 1)), to: toDateInput(now) });
+  const [range, setRange] = useState({ from: "", to: "" });
+  // الموسم: القائمة من الخادم، والمختار (يبدأ بالموسم الحالي؛ "" = كل المواسم)
+  const [seasonInfo, setSeasonInfo] = useState(null);
+  const [season, setSeason] = useState(null);
+  useEffect(() => {
+    sb.rpc("viewer_seasons", { p_code: code }).then(({ data }) => {
+      setSeasonInfo(data || { current: "", seasons: [] });
+      setSeason(data && data.current ? data.current : "");
+    });
+  }, [code]);
   const [rows, setRows] = useState(null);
   const [error, setError] = useState("");
 
@@ -2546,14 +2645,17 @@ function ReportsPage({ code, viewerName }) {
   const load = useCallback(async () => {
     setError("");
     if (range.from && range.to && range.from > range.to) return setError("تاريخ البداية يجب أن يسبق تاريخ النهاية.");
+    if (season === null) return;
     setRows(null);
     const pFrom = range.from ? new Date(`${range.from}T00:00:00`).toISOString() : null;
     let pTo = null;
     if (range.to) { const d = new Date(`${range.to}T00:00:00`); d.setDate(d.getDate() + 1); pTo = d.toISOString(); }
-    const { data, error } = await sb.rpc("viewer_report", { p_code: code, p_from: pFrom, p_to: pTo });
+    let { data, error } = await sb.rpc("viewer_report", { p_code: code, p_from: pFrom, p_to: pTo, p_season: season || null });
+    // قاعدة لم يُنفَّذ فيها القسم 21 بعد: النسخة القديمة بلا موسم
+    if (error) ({ data, error } = await sb.rpc("viewer_report", { p_code: code, p_from: pFrom, p_to: pTo }));
     if (error) return setError(NET_ERR);
     setRows(data || []);
-  }, [code, range]);
+  }, [code, range, season]);
   useEffect(() => { load(); }, [load]);
 
   // أزرار الفترات السريعة
@@ -2577,6 +2679,15 @@ function ReportsPage({ code, viewerName }) {
       </div>
       <div className="card" style={{ marginBottom: 16 }}>
         <div className="filters">
+          {seasonInfo && (
+            <Field label="الموسم">
+              <select value={season || ""} onChange={e => setSeason(e.target.value)}>
+                <option value="">كل المواسم</option>
+                {[...new Set([seasonInfo.current, ...seasonInfo.seasons].filter(Boolean))].map(x =>
+                  <option key={x} value={x}>{x}{x === seasonInfo.current ? " (الحالي)" : ""}</option>)}
+              </select>
+            </Field>
+          )}
           <Field label="من تاريخ"><input type="date" value={range.from} onChange={e => setRange(r => ({ ...r, from: e.target.value }))} /></Field>
           <Field label="إلى تاريخ"><input type="date" value={range.to} onChange={e => setRange(r => ({ ...r, to: e.target.value }))} /></Field>
         </div>
@@ -2624,9 +2735,9 @@ function ReportsPage({ code, viewerName }) {
           {rows.length > 0 && (
             <div className="center" style={{ marginTop: 12 }}>
               <button className="btn secondary" onClick={() => saveWorkbook([{ name: "تقرير الشكاوى",
-                headers: ["الحالة", "رقم الشكوى", "تاريخ الشكوى", "العنوان", "اسم المشتكي", "المشتكى عليه", "الموضوع", "النتيجة", "تاريخ الإغلاق"],
-                rows: rows.map(r => [r.status, r.complaint_number, xlDate(r.received_date), r.title, r.complainant_name, r.accused_name, r.subject, r.result, xlDate(r.closed_date)]) }],
-                `تقرير-الشكاوى-${range.from || "الكل"}-${range.to || ""}.xlsx`).catch(e => setError(e.message || NET_ERR))}>⬇ تصدير التقرير (Excel)</button>
+                headers: ["الموسم", "الحالة", "رقم الشكوى", "تاريخ الشكوى", "العنوان", "اسم المشتكي", "المشتكى عليه", "الموضوع", "النتيجة", "تاريخ الإغلاق"],
+                rows: rows.map(r => [r.season, r.status, r.complaint_number, xlDate(r.received_date), r.title, r.complainant_name, r.accused_name, r.subject, r.result, xlDate(r.closed_date)]) }],
+                `تقرير-الشكاوى-${season ? "موسم-" + season + "-" : ""}${range.from || "الكل"}-${range.to || ""}.xlsx`).catch(e => setError(e.message || NET_ERR))}>⬇ تصدير التقرير (Excel)</button>
             </div>
           )}
         </>

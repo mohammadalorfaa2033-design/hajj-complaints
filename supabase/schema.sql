@@ -21,7 +21,7 @@
 --
 --  ملاحظات:
 --    - الموقع لا يقرأ أي جدول مباشرة؛ كل العمليات عبر دوال تتحقق من المدخلات داخلها.
---    - رقم الشكوى: السنة-الرقم، مثل 2026-00006.
+--    - رقم الشكوى: الموسم-الرقم، مثل 1448-00006 (يبدأ من 1 في كل موسم).
 --    - الحالات: جديد (البداية) / قيد المراجعة / جاري المتابعة / مغلقة (يُسجَّل تاريخ الإغلاق).
 --    - إيقاف المحاولات الخاطئة مُلغى بطلب الإدارة (ip_locked تُرجع false دائماً).
 --
@@ -52,6 +52,8 @@
 --                الاعتراض على «مغلقة» ← «قيد المراجعة».
 --    2026-09-30  القسم 20: رقم الشكوى بلا «HJ-» (2026-00006) مع تحويل الأرقام الحالية وقبول الصيغتين في البحث؛
 --                تصفير المنصة برمز خاص (set_reset_code / admin_reset_platform).
+--    2026-09-30  القسم 21: المواسم — رقم الشكوى = الموسم-الرقم (1448-00001) ويبدأ من 1 في كل موسم؛
+--                الموسم الحالي يحدده الأدمن (admin_get_season / admin_set_season)، وتصفية التقارير بالموسم.
 -- =====================================================================
 
 -- ---------------------------------------------------------------------
@@ -146,6 +148,11 @@ drop function if exists public.viewer_complaint_card(text, text);
 drop function if exists public.admin_get_report_card(text);
 drop function if exists public.admin_set_report_card(text, boolean);
 drop function if exists public.setting(text);
+drop function if exists public.viewer_report(text, timestamptz, timestamptz, text);
+drop function if exists public.admin_get_season(text);
+drop function if exists public.admin_set_season(text, text);
+drop function if exists public.viewer_seasons(text);
+drop table if exists public.season_counters cascade;
 
 -- تفعيل pgcrypto لتوليد أرقام عشوائية آمنة
 create extension if not exists pgcrypto with schema extensions;
@@ -1831,7 +1838,151 @@ end $$;
 grant execute on function public.admin_reset_platform(text, text) to anon, authenticated;
 
 -- ---------------------------------------------------------------------
--- 21) كلمة مرور الأدمن الأولى — غيّر 'غيّرني-123' قبل التنفيذ (6 أحرف على الأقل)
+-- 21) المواسم: رقم الشكوى = الموسم-الرقم (1448-00001)، والترقيم يبدأ من 1 في كل موسم
+--     الموسم الحالي يحدده الأدمن من تبويب «الإعدادات» (app_settings: season)
+--     يُنفَّذ وحده أيضاً كتحديث لقاعدة موجودة (لا يحذف بيانات)
+-- ---------------------------------------------------------------------
+-- حقل الموسم في الشكوى، والموسم الحالي الافتراضي 1448
+alter table public.complaints add column if not exists season text;
+insert into public.app_settings (key, value) values ('season', '1448') on conflict (key) do nothing;
+
+-- عدّاد لكل موسم: آخر رقم مُستخدم فيه (زيادته ذرّية فلا يتكرر رقم مع التقديم المتزامن)
+create table if not exists public.season_counters (
+  season       text primary key,
+  last_number  int  not null default 0
+);
+alter table public.season_counters enable row level security;
+revoke all on public.season_counters from anon, authenticated;
+
+-- مرة واحدة: الشكاوى الحالية تُحسب على الموسم الحالي، ويبدأ عدّاده بعد أكبر رقم فيه (إن وُجد)
+alter table public.complaints disable trigger user;
+update public.complaints set season = public.setting('season') where season is null;
+alter table public.complaints enable trigger user;
+insert into public.season_counters (season, last_number)
+  select c.season, max(nullif(substring(c.complaint_number from '^' || c.season || '-(\d+)$'), '')::int)
+  from public.complaints c
+  where c.complaint_number ~ ('^' || c.season || '-\d+$')
+  group by c.season
+on conflict (season) do update set last_number = greatest(public.season_counters.last_number, excluded.last_number);
+
+-- عند إدخال شكوى: الموسم الحالي، ورقمها التالي في هذا الموسم، ورمز المتابعة والتاريخ، والحالة «جديد»
+create or replace function public.complaints_before_insert()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare
+  v_season text := coalesce(nullif(public.setting('season'), ''), '1448');
+  v_n      int;
+begin
+  insert into public.season_counters (season, last_number) values (v_season, 1)
+    on conflict (season) do update set last_number = public.season_counters.last_number + 1
+    returning last_number into v_n;
+  new.season           := v_season;
+  new.complaint_number := v_season || '-' || lpad(v_n::text, 5, '0');
+  new.tracking_code    := public.random_password(6, true);
+  new.received_date    := now();
+  new.updated_at       := now();
+  new.status           := 'جديد';
+  new.closed_date      := null;
+  return new;
+end $$;
+
+-- الأدمن: الموسم الحالي + قائمة المواسم مع عدد شكاوى كل موسم
+create or replace function public.admin_get_season(p_secret text)
+returns json
+language plpgsql security definer set search_path = public as $$
+begin
+  if public.verify_password('أدمن', p_secret) is null then
+    return null;
+  end if;
+  return json_build_object(
+    'current', public.setting('season'),
+    'seasons', coalesce((select json_agg(x order by x.season desc) from (
+        select season, count(*) as total from public.complaints where season is not null group by season) x), '[]'::json));
+end $$;
+
+-- الأدمن: تغيير الموسم الحالي (4 أرقام)؛ الشكاوى الجديدة بعدها تُرقَّم في الموسم الجديد من 1
+-- تُرجع: 'OK' أو 'INVALID'
+create or replace function public.admin_set_season(p_secret text, p_season text)
+returns text
+language plpgsql security definer set search_path = public as $$
+declare
+  v_season text := translate(btrim(coalesce(p_season, '')), '٠١٢٣٤٥٦٧٨٩', '0123456789');
+begin
+  if public.verify_password('أدمن', p_secret) is null or v_season !~ '^\d{4}$' then
+    return 'INVALID';
+  end if;
+  insert into public.app_settings (key, value) values ('season', v_season)
+    on conflict (key) do update set value = excluded.value;
+  return 'OK';
+end $$;
+
+-- التقارير: قائمة المواسم (الحالي + ما فيه شكاوى) لكلمة مرور إدارة صحيحة
+create or replace function public.viewer_seasons(p_code text)
+returns json
+language plpgsql security definer set search_path = public as $$
+begin
+  if public.verify_password('إدارة', p_code) is null then
+    return null;
+  end if;
+  return json_build_object(
+    'current', public.setting('season'),
+    'seasons', coalesce((select json_agg(s order by s desc) from (
+        select distinct season as s from public.complaints where season is not null) x), '[]'::json));
+end $$;
+
+-- التقارير: نسخة تُرجع الموسم وتقبل تصفية بالموسم (p_season فارغ = كل المواسم)
+drop function if exists public.viewer_report(text, timestamptz, timestamptz);
+drop function if exists public.viewer_report(text, timestamptz, timestamptz, text);
+create function public.viewer_report(p_code text, p_from timestamptz, p_to timestamptz, p_season text)
+returns table (complaint_number text, season text, status text, complainant_name text, accused_name text, title text,
+               subject text, result text, received_date timestamptz, closed_date timestamptz)
+language plpgsql security definer set search_path = public as $$
+begin
+  if public.verify_password('إدارة', p_code) is null then
+    return;
+  end if;
+  return query
+    select c.complaint_number, c.season, c.status, c.complainant_name, c.accused_name, c.title,
+           c.subject, c.result, c.received_date, c.closed_date
+    from public.complaints c
+    where (p_from is null or c.received_date >= p_from)
+      and (p_to   is null or c.received_date <  p_to)
+      and (coalesce(p_season, '') = '' or c.season = p_season)
+    order by c.received_date desc;
+end $$;
+
+-- التصفير: نسخة تمسح عدّادات المواسم أيضاً (فيبدأ الموسم الحالي من 00001)
+create or replace function public.admin_reset_platform(p_secret text, p_reset_code text)
+returns text
+language plpgsql security definer set search_path = public, extensions as $$
+declare
+  v_hash text;
+begin
+  if public.verify_password('أدمن', p_secret) is null then
+    return 'WRONG_CODE';
+  end if;
+  select value into v_hash from public.app_settings where key = 'reset_hash';
+  if v_hash is null then
+    return 'NO_CODE';
+  end if;
+  if crypt(coalesce(p_reset_code, ''), v_hash) <> v_hash then
+    return 'WRONG_CODE';
+  end if;
+  delete from public.complaints where true;
+  delete from public.access_passwords where role = 'مشتكي';
+  delete from public.season_counters where true;
+  perform setval('public.complaint_number_seq', 1, false);
+  return 'OK';
+end $$;
+
+-- السماح للموقع باستدعاء الدوال الجديدة
+grant execute on function public.admin_get_season(text)                               to anon, authenticated;
+grant execute on function public.admin_set_season(text, text)                         to anon, authenticated;
+grant execute on function public.viewer_seasons(text)                                 to anon, authenticated;
+grant execute on function public.viewer_report(text, timestamptz, timestamptz, text)  to anon, authenticated;
+grant execute on function public.admin_reset_platform(text, text)                     to anon, authenticated;
+
+-- ---------------------------------------------------------------------
+-- 22) كلمة مرور الأدمن الأولى — غيّر 'غيّرني-123' قبل التنفيذ (6 أحرف على الأقل)
 -- ---------------------------------------------------------------------
 insert into public.access_passwords (role, password, holder_name)
 values ('أدمن', '12345', 'المدير');
