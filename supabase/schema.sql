@@ -54,6 +54,7 @@
 --                تصفير المنصة برمز خاص (set_reset_code / admin_reset_platform).
 --    2026-09-30  القسم 21: المواسم — رقم الشكوى = الموسم-الرقم (1448-00001) ويبدأ من 1 في كل موسم؛
 --                الموسم الحالي يحدده الأدمن (admin_get_season / admin_set_season)، وتصفية التقارير بالموسم.
+--    2026-09-30  القسم 22: كلمة مرور قفل ملفات Excel (admin_get_excel_lock / admin_set_excel_lock).
 -- =====================================================================
 
 -- ---------------------------------------------------------------------
@@ -153,6 +154,8 @@ drop function if exists public.admin_get_season(text);
 drop function if exists public.admin_set_season(text, text);
 drop function if exists public.viewer_seasons(text);
 drop table if exists public.season_counters cascade;
+drop function if exists public.admin_get_excel_lock(text);
+drop function if exists public.admin_set_excel_lock(text, text);
 
 -- تفعيل pgcrypto لتوليد أرقام عشوائية آمنة
 create extension if not exists pgcrypto with schema extensions;
@@ -1982,7 +1985,40 @@ grant execute on function public.viewer_report(text, timestamptz, timestamptz, t
 grant execute on function public.admin_reset_platform(text, text)                     to anon, authenticated;
 
 -- ---------------------------------------------------------------------
--- 22) كلمة مرور الأدمن الأولى — غيّر 'غيّرني-123' قبل التنفيذ (6 أحرف على الأقل)
+-- 22) كلمة مرور قفل ملفات Excel (ملفات التصدير تُقفل للعرض فقط)
+--     تُحفظ في app_settings (excel_lock)، ويقرؤها ويغيّرها الأدمن فقط
+--     يُنفَّذ وحده أيضاً كتحديث لقاعدة موجودة (لا يحذف بيانات)
+-- ---------------------------------------------------------------------
+-- قراءة كلمة مرور القفل (فارغة = قفل بلا كلمة مرور)
+create or replace function public.admin_get_excel_lock(p_secret text)
+returns text
+language plpgsql security definer set search_path = public as $$
+begin
+  if public.verify_password('أدمن', p_secret) is null then
+    return null;
+  end if;
+  return coalesce(public.setting('excel_lock'), '');
+end $$;
+
+-- تغيير كلمة مرور القفل (فارغة = إلغاء كلمة المرور مع بقاء القفل)؛ تُرجع 'OK' أو 'INVALID'
+create or replace function public.admin_set_excel_lock(p_secret text, p_password text)
+returns text
+language plpgsql security definer set search_path = public as $$
+begin
+  if public.verify_password('أدمن', p_secret) is null or length(coalesce(p_password, '')) > 50 then
+    return 'INVALID';
+  end if;
+  insert into public.app_settings (key, value) values ('excel_lock', btrim(coalesce(p_password, '')))
+    on conflict (key) do update set value = excluded.value;
+  return 'OK';
+end $$;
+
+-- السماح للموقع باستدعاء الدالتين
+grant execute on function public.admin_get_excel_lock(text)       to anon, authenticated;
+grant execute on function public.admin_set_excel_lock(text, text) to anon, authenticated;
+
+-- ---------------------------------------------------------------------
+-- 23) كلمة مرور الأدمن الأولى — غيّر 'غيّرني-123' قبل التنفيذ (6 أحرف على الأقل)
 -- ---------------------------------------------------------------------
 insert into public.access_passwords (role, password, holder_name)
 values ('أدمن', '12345', 'المدير');

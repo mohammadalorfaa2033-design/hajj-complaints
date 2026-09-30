@@ -65,6 +65,8 @@
     2026-09-30  المواسم: رقم الشكوى = الموسم-الرقم (1448-00001) ويبدأ من 1 في كل موسم؛ بطاقة «الموسم» في
                 «الإعدادات» لبدء موسم جديد؛ اختيار الموسم فوق جدول الشكاوى وفي التقارير (افتراضياً الحالي)؛
                 عمود «الموسم» في ملفات Excel، والتصدير الكامل يخص الموسم المختار.
+    2026-09-30  ملفات Excel تُصدَّر مقفولة للعرض فقط (مع أزرار التصفية)، وكلمة مرور فك القفل من «الإعدادات»؛
+                زر «📂 استعراض نسخة محفوظة» في الشكاوى والتقارير يعرض ملف Excel من الجهاز للاطلاع فقط.
 =======================================================================
 -->
 <html lang="ar" dir="rtl">
@@ -315,6 +317,12 @@
   .danger-zone { border: 2px solid #f1b5b0; background: #fff8f7; }
   .danger-zone h2 { color: var(--danger); }
 
+  /* نافذة استعراض نسخة Excel: أعرض من النافذة العادية، والجدول يتمرر داخل إطاره */
+  .xl-modal { max-width: 1100px; background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow); padding: 16px; }
+  .xl-view { max-height: 60vh; }
+  .xl-view th { position: sticky; top: 0; background: #eef2ee; z-index: 1; }
+  .xl-view td { max-width: 320px; white-space: pre-wrap; vertical-align: top; }
+
   /* سطر اختيار الموسم فوق جدول الشكاوى */
   .season-row { margin-bottom: 10px; align-items: center; }
   .season-row select { width: auto; min-width: 170px; }
@@ -503,7 +511,11 @@ function loadXLSX() {
 // تاريخ ووقت بصيغة قابلة للفرز في Excel: 2026-09-29 14:30
 const xlDate = v => { if (!v) return ""; const d = new Date(v); return `${toDateInput(d)} ${pad(d.getHours())}:${pad(d.getMinutes())}`; };
 
+// كلمة مرور قفل ملفات Excel: يجلبها AdminPage عند الدخول من الإعدادات (فارغة = قفل بلا كلمة مرور)
+const excelLock = { password: "" };
+
 // إنشاء ملف Excel من عدة أوراق [{name, headers, rows}] وتنزيله؛ الأوراق من اليمين إلى اليسار
+// كل ورقة مقفولة للعرض فقط: القراءة والتحديد والتصفية وتوسيع الأعمدة مسموحة، والكتابة والحذف ممنوعة
 async function saveWorkbook(sheets, filename) {
   const XLSX = await loadXLSX();
   const wb = XLSX.utils.book_new();
@@ -512,6 +524,9 @@ async function saveWorkbook(sheets, filename) {
     const ws = XLSX.utils.aoa_to_sheet([sh.headers, ...sh.rows.map(r => r.map(v => v ?? ""))]);
     // عرض كل عمود حسب أطول قيمة فيه (بين 10 و60 حرفاً)
     ws["!cols"] = sh.headers.map((h, i) => ({ wch: Math.min(60, Math.max(10, h.length + 2, ...sh.rows.map(r => String(r[i] ?? "").length + 2))) }));
+    // أزرار التصفية على صف العناوين، ثم قفل الورقة
+    if (ws["!ref"]) ws["!autofilter"] = { ref: ws["!ref"] };
+    ws["!protect"] = { password: excelLock.password || undefined, autoFilter: false, formatColumns: false, formatRows: false };
     XLSX.utils.book_append_sheet(wb, ws, sh.name.slice(0, 31));
   });
   XLSX.writeFile(wb, filename);
@@ -1179,6 +1194,11 @@ function AdminPage({ secret }) {
     setOpenFromDue(fromDue); setOpenId(c.id);
   };
 
+  // كلمة مرور قفل ملفات Excel (من الإعدادات) لتُستخدم في كل تصدير
+  useEffect(() => {
+    sb.rpc("admin_get_excel_lock", { p_secret: secret }).then(({ data }) => { excelLock.password = data || ""; });
+  }, [secret]);
+
   // جلب كل الشكاوى
   const load = useCallback(async () => {
     setError("");
@@ -1530,6 +1550,7 @@ function AdminSettings({ secret, rows, reload }) {
   return (
     <div>
     <SeasonCard secret={secret} reload={reload} />
+    <ExcelLockCard secret={secret} />
     <div className="card danger-zone">
       <h2>⚠️ تصفير المنصة</h2>
       <ul>
@@ -1558,6 +1579,55 @@ function AdminSettings({ secret, rows, reload }) {
         {busy ? "جارٍ التنفيذ…" : "🗑️ تصفير المنصة نهائياً"}
       </button>
     </div>
+    </div>
+  );
+}
+
+// بطاقة قفل ملفات Excel: كلمة المرور التي تُقفل بها ملفات التصدير (لفك القفل في Excel عند الحاجة)
+function ExcelLockCard({ secret }) {
+  // الكلمة المكتوبة، إظهارها، حالة الحفظ، والرسالة
+  const [value, setValue] = useState(null);
+  const [show, setShow] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+
+  // جلب الكلمة الحالية
+  useEffect(() => {
+    sb.rpc("admin_get_excel_lock", { p_secret: secret }).then(({ data, error }) => {
+      if (error) return setMsg({ type: "error", text: "تعذّر الجلب (نفّذ القسم 22 من schema.sql في Supabase)." });
+      setValue(data || "");
+    });
+  }, [secret]);
+
+  // الحفظ: تُستخدم فوراً في التصدير التالي
+  async function save() {
+    setBusy(true); setMsg(null);
+    const { data, error } = await sb.rpc("admin_set_excel_lock", { p_secret: secret, p_password: value });
+    setBusy(false);
+    if (error || data !== "OK") return setMsg({ type: "error", text: "تعذّر الحفظ، يرجى المحاولة مرة أخرى." });
+    excelLock.password = value.trim();
+    setMsg({ type: "ok", text: value.trim() ? "✅ تم الحفظ: ملفات Excel تُقفل بهذه الكلمة." : "✅ تم الحفظ: ملفات Excel تُقفل بلا كلمة مرور." });
+  }
+
+  // العرض: شرح مختصر، خانة الكلمة مع العين، وزر الحفظ
+  return (
+    <div className="card">
+      <h2>🔒 قفل ملفات Excel</h2>
+      <p className="muted" style={{ fontSize: 14, marginTop: 0 }}>كل ملف Excel يُصدَّر يكون للعرض فقط (لا كتابة ولا حذف). لفك القفل في Excel: مراجعة ← إلغاء حماية الورقة، ثم هذه الكلمة.</p>
+      {msg && <Alert type={msg.type}>{msg.text}</Alert>}
+      {value !== null && (
+        <Field label="كلمة مرور فك القفل" hint="اتركها فارغة للقفل بلا كلمة مرور">
+          <div className="row" style={{ flexWrap: "nowrap" }}>
+            <div className="pw-wrap grow">
+              <input className="secret-input" type={show ? "text" : "password"} value={value} onChange={e => setValue(e.target.value)}
+                autoComplete="off" autoCapitalize="off" spellCheck={false} dir="ltr" maxLength={50} />
+              <button type="button" className="pw-toggle" onClick={() => setShow(v => !v)}
+                aria-label={show ? "إخفاء الكلمة" : "إظهار الكلمة"}><EyeIcon closed={show} /></button>
+            </div>
+            <button type="button" className="btn gold" disabled={busy} onClick={save}>{busy ? "…" : "حفظ"}</button>
+          </div>
+        </Field>
+      )}
     </div>
   );
 }
@@ -1620,6 +1690,77 @@ function SeasonCard({ secret, reload }) {
   );
 }
 
+// استعراض نسخة Excel محفوظة على الجهاز (للاطلاع فقط): يُقرأ الملف داخل المتصفح ولا يُرفع إلى أي مكان
+// ولا يغيّر شيئاً في المنصة. يعرض كل ورقة في تبويب، مع بحث، وأول 500 صف مطابق
+function ExcelViewer({ onClose }) {
+  // الملف المقروء {name, sheets:[{name, rows}]}، الورقة المعروضة، البحث، وحالة القراءة
+  const [book, setBook] = useState(null);
+  const [active, setActive] = useState(0);
+  const [search, setSearch] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const LIMIT = 500;
+
+  // قراءة الملف المختار: كل ورقة ← مصفوفة صفوف (الصف الأول = العناوين)
+  async function open(file) {
+    if (!file) return;
+    setBusy(true); setError(""); setBook(null);
+    try {
+      const XLSX = await loadXLSX();
+      const wb = XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: true });
+      const sheets = wb.SheetNames.map(n => ({ name: n,
+        rows: XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, defval: "", raw: false, dateNF: "yyyy-mm-dd hh:mm" }) }));
+      setBook({ name: file.name, sheets }); setActive(0); setSearch("");
+    } catch (e) { setError("تعذّر قراءة الملف. تأكد أنه ملف Excel ‎(.xlsx)."); }
+    setBusy(false);
+  }
+
+  // الورقة الحالية: العناوين، والصفوف المطابقة للبحث
+  const sheet = book && book.sheets[active];
+  const head = sheet ? sheet.rows[0] || [] : [];
+  const term = search.trim();
+  const body = sheet ? sheet.rows.slice(1).filter(r => !term || r.some(v => String(v).includes(term))) : [];
+
+  // العرض: نافذة فيها اختيار الملف، تبويبات الأوراق، البحث، ثم الجدول (بلا أي تعديل)
+  return (
+    <div className="modal-back" onClick={onClose}>
+      <div className="modal xl-modal" onClick={e => e.stopPropagation()}>
+        <div className="modal-close"><button className="btn secondary sm" onClick={onClose}>✕ إغلاق</button></div>
+        <h2 style={{ marginTop: 0 }}>📂 استعراض نسخة محفوظة <span className="muted" style={{ fontSize: 13 }}>(للاطلاع فقط)</span></h2>
+        <label className="btn secondary block">
+          {busy ? "جارٍ القراءة…" : book ? `📄 ${book.name} — اختيار ملف آخر` : "اختر ملف Excel من جهازك"}
+          <input type="file" accept=".xlsx,.xls" hidden onChange={e => { open(e.target.files[0]); e.target.value = ""; }} />
+        </label>
+        <p className="muted" style={{ fontSize: 13 }}>الملف يُقرأ على هذا الجهاز فقط، ولا يُرفع ولا يغيّر بيانات المنصة.</p>
+        {error && <Alert type="error">{error}</Alert>}
+        {book && (
+          <>
+            <div className="tabs">
+              {book.sheets.map((sh, i) => (
+                <button key={sh.name} className={i === active ? "active" : ""} onClick={() => { setActive(i); setSearch(""); }}>
+                  {sh.name} ({Math.max(0, sh.rows.length - 1)})
+                </button>
+              ))}
+            </div>
+            <input type="text" placeholder="بحث في هذه الورقة…" value={search} onChange={e => setSearch(e.target.value)} style={{ marginBottom: 10 }} />
+            {body.length === 0 ? <p className="muted center">لا توجد صفوف{term ? " مطابقة" : ""}.</p> : (
+              <div className="table-wrap xl-view">
+                <table>
+                  <thead><tr>{head.map((h, i) => <th key={i}>{h}</th>)}</tr></thead>
+                  <tbody>
+                    {body.slice(0, LIMIT).map((r, i) => <tr key={i}>{head.map((_, j) => <td key={j}>{r[j]}</td>)}</tr>)}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            {body.length > LIMIT && <p className="muted center" style={{ fontSize: 13 }}>يظهر أول {LIMIT} صف من {body.length} — استخدم البحث للوصول إلى صف محدد.</p>}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // تبويب الشكاوى: تصفية بالحالة وبحث، ثم جدول الشكاوى
 function AdminComplaints({ secret, rows, onSaved, reload, onOpen }) {
   // التصفية والبحث، وحالة التصدير الكامل
@@ -1627,6 +1768,7 @@ function AdminComplaints({ secret, rows, onSaved, reload, onOpen }) {
   const [search, setSearch] = useState("");
   const [exporting, setExporting] = useState(false);
   const [exportErr, setExportErr] = useState("");
+  const [viewing, setViewing] = useState(false);   // نافذة استعراض نسخة محفوظة
 
   // الموسم المعروض: يبدأ بالموسم الحالي من الإعدادات ("" = كل المواسم)
   const [season, setSeason] = useState("");
@@ -1673,7 +1815,9 @@ function AdminComplaints({ secret, rows, onSaved, reload, onOpen }) {
         <input className="grow" type="text" placeholder="بحث بالرقم أو الاسم أو الهاتف أو الموضوع أو الجهة…" value={search} onChange={e => setSearch(e.target.value)} />
         <button className="btn secondary" onClick={reload}>🔄 تحديث</button>
         <button className="btn gold" disabled={exporting || !rows} onClick={exportAll} title="الشكاوى + الجلسات + سجل الشكاوى + سجل الإحالة (للموسم المختار)">{exporting ? "جارٍ التصدير…" : "📥 تصدير كل الجداول (Excel)"}</button>
+        <button className="btn secondary" onClick={() => setViewing(true)}>📂 استعراض نسخة محفوظة</button>
       </div>
+      {viewing && <ExcelViewer onClose={() => setViewing(false)} />}
       {exportErr && <Alert type="error">{exportErr}</Alert>}
       {rows === null ? <Loading /> : <ComplaintsTable secret={secret} rows={visible} onSaved={onSaved} onOpen={onOpen} />}
     </div>
@@ -2637,6 +2781,7 @@ function ReportsPage({ code, viewerName }) {
   // بطاقة الشكوى: هل سمح الأدمن بعرضها؟ ورقم الشكوى المفتوحة
   const [cardOn, setCardOn] = useState(false);
   const [openNum, setOpenNum] = useState(null);
+  const [viewing, setViewing] = useState(false);   // نافذة استعراض نسخة محفوظة
   useEffect(() => {
     sb.rpc("viewer_card_enabled", { p_code: code }).then(({ data }) => setCardOn(data === true));
   }, [code]);
@@ -2695,6 +2840,7 @@ function ReportsPage({ code, viewerName }) {
           <button className="btn secondary sm" onClick={() => preset("month")}>هذا الشهر</button>
           <button className="btn secondary sm" onClick={() => preset("30")}>آخر 30 يوماً</button>
           <button className="btn secondary sm" onClick={() => preset("all")}>كل الفترات</button>
+          <button className="btn secondary sm" onClick={() => setViewing(true)}>📂 استعراض نسخة محفوظة</button>
         </div>
       </div>
       {error && <Alert type="error">{error}</Alert>}
@@ -2743,6 +2889,7 @@ function ReportsPage({ code, viewerName }) {
         </>
       )}
       {openNum && <ReportCard code={code} number={openNum} onClose={() => setOpenNum(null)} />}
+      {viewing && <ExcelViewer onClose={() => setViewing(false)} />}
     </div>
   );
 }
