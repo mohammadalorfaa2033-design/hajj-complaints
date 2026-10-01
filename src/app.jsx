@@ -28,6 +28,9 @@
 //    2026-09-30  قسم «📘 دليل المنصة» في الرئيسية للمدير والموظف (تقرير المنصة داخل اللوحة، مع تسلسل الحالات بألوانها).
 //    2026-09-30  قائمة جانبية بدل أزرار الرئيسية (ثابتة على الحاسوب، منزلقة من اليمين على الجوال) بأعداد المطلوب
 //                والجديدة؛ الرئيسية صارت ترحيباً وبحثاً وبطاقات ملخص؛ «إرسال رابط» للمدير فقط.
+//    2026-10-01  القائمة الجانبية في أقصى يمين الشاشة؛ قسم «📈 المؤشرات» (بطاقات، توزيع الحالات والتصنيفات والصفات
+//                والإحالات، الوارد يومياً، وتقرير Word بالترويسة)؛ رد المعترض إلزامي عند الإغلاق بعد الاعتراض؛
+//                زر 🎤 للتحدث في صفحة الاعتراض.
 // =======================================================================
 // استيراد خطافات React المستخدمة في المكونات
 const { useState, useEffect, useCallback } = React;
@@ -221,6 +224,17 @@ function buildComplaintDoc(D, c, sess, logo, letterhead) {
   return new Document({ sections: [{ headers, properties: { page: { margin } }, children: [...head, ...body] }] });
 }
 
+// جلب ملف من موقع المنصة كبايتات (الترويسة والشعار)؛ null إن تعذّر
+const fetchBytes = async name => { try { const r = await fetch(name); return r.ok ? new Uint8Array(await r.arrayBuffer()) : null; } catch { return null; } };
+
+// تنزيل ملف مولَّد باسم معيّن
+function downloadBlob(blob, name) {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = name;
+  document.body.appendChild(a); a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 2000);
+}
+
 // التصدير: جلب جلسات الشكوى والشعار، بناء المستند، ثم تنزيله
 async function exportComplaintWord(secret, c) {
   const D = await loadDocx();
@@ -228,14 +242,8 @@ async function exportComplaintWord(secret, c) {
   if (s.error) throw new Error(NET_ERR);
   const sess = (s.data || []).slice().sort((a, b) => new Date(a.session_at) - new Date(b.session_at));
   // صورتا الترويسة والشعار من موقع المنصة
-  const img = async name => { try { const r = await fetch(name); return r.ok ? new Uint8Array(await r.arrayBuffer()) : null; } catch { return null; } };
-  const [letterhead, logo] = await Promise.all([img("letterhead.jpg"), img("logo.png")]);
-  const blob = await D.Packer.toBlob(buildComplaintDoc(D, c, sess, logo, letterhead));
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = `ملف-الشكوى-${c.complaint_number}.docx`;
-  document.body.appendChild(a); a.click();
-  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 2000);
+  const [letterhead, logo] = await Promise.all([fetchBytes("letterhead.jpg"), fetchBytes("logo.png")]);
+  downloadBlob(await D.Packer.toBlob(buildComplaintDoc(D, c, sess, logo, letterhead)), `ملف-الشكوى-${c.complaint_number}.docx`);
 }
 
 // تصدير كامل للأدمن: الشكاوى والجلسات والإحالات — في ملف واحد
@@ -771,6 +779,7 @@ function ObjectionPage() {
   const [code, setCode] = useState("");
   const [view, setView] = useState(null);
   const [text, setText] = useState("");
+  const [interim, setInterim] = useState("");   // الكلام الجاري التقاطه قبل تثبيته
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [done, setDone] = useState(false);
@@ -858,8 +867,12 @@ function ObjectionPage() {
             </div>
           ) : (
             <form className="card" onSubmit={submit} noValidate>
-              <Field label="نص الاعتراض" required hint="يُقبل الاعتراض مرة واحدة فقط، فاكتبه كاملاً قبل الإرسال">
+              <div className="row" style={{ justifyContent: "flex-end", marginBottom: 6 }}>
+                <MicButton onText={t => setText(x => (x ? x.replace(/\s*$/, " ") : "") + t)} onError={setError} onInterim={setInterim} />
+              </div>
+              <Field label="نص الاعتراض" required hint="يُقبل الاعتراض مرة واحدة فقط، فاكتبه كاملاً قبل الإرسال — أو اضغط 🎤 وتحدّث">
                 <textarea value={text} onChange={e => setText(e.target.value)} maxLength={5000} style={{ minHeight: 150 }} />
+                {interim && <div className="interim">🎙️ {interim}</div>}
               </Field>
               <button className="btn block" style={{ marginTop: 14 }} disabled={busy}>{busy ? "جارٍ الإرسال…" : "إرسال الاعتراض"}</button>
             </form>
@@ -963,6 +976,7 @@ const SECTIONS = {
   sessions:   { title: "🗓️ الجلسات" },
   links:      { title: "🔗 إرسال رابط", manager: true },
   decisions:  { title: "📑 القرارات الإدارية" },
+  indicators: { title: "📈 المؤشرات" },
   guide:      { title: "📘 دليل المنصة" },
   access:     { title: "🔐 دخول المشتكين", manager: true },
   viewers:    { title: "📊 كلمات مرور الإدارة", manager: true },
@@ -1068,6 +1082,7 @@ function AdminPage({ secret }) {
         {current === "links" && <AdminLinks secret={secret} isManager={isManager} />}
         {current === "decisions" && <AdminDecisions secret={secret} isManager={isManager} />}
         {current === "guide" && <AdminGuide isManager={isManager} />}
+        {current === "indicators" && <AdminIndicators secret={secret} rows={rows} />}
         {current === "complaints" && <AdminComplaints key={start.search + start.filter} secret={secret} rows={rows} onSaved={onSaved} reload={reload} onOpen={c => openComplaint(c)}
                                    initialSearch={start.search || ""} initialFilter={start.filter || "الكل"} />}
         {current === "sessions" && <AdminSessions secret={secret} version={sessVer} onOpen={c => openComplaint(c)} />}
@@ -1089,7 +1104,7 @@ function AdminPage({ secret }) {
 }
 
 // عناصر القائمة الجانبية: المفتاح، الأيقونة، والاسم (الأقسام العامة، ثم أقسام المدير)
-const NAV_MAIN = [["home", "🏠", "الرئيسية"], ["today", "📅", "المطلوب اليوم"], ["complaints", "📋", "الشكاوى"],
+const NAV_MAIN = [["home", "🏠", "الرئيسية"], ["indicators", "📈", "المؤشرات"], ["today", "📅", "المطلوب اليوم"], ["complaints", "📋", "الشكاوى"],
                   ["sessions", "🗓️", "الجلسات"], ["decisions", "📑", "القرارات الإدارية"], ["guide", "📘", "دليل المنصة"]];
 const NAV_MANAGER = [["links", "🔗", "إرسال رابط"], ["access", "🔐", "دخول المشتكين"], ["viewers", "📊", "كلمات مرور الإدارة"],
                      ["staff", "👥", "الموظفون"], ["settings", "⚙️", "الإعدادات"]];
@@ -2354,6 +2369,7 @@ function SessionsSection({ secret, complaint, onApplied, onChanged, closeReq = 0
     if (!form.at) return setMsg({ type: "error", text: "حدّد تاريخ ووقت الجلسة." });
     const closing = isClosed(form.status);
     if (closing && !form.cresult.trim()) return setMsg({ type: "error", text: "اكتب النص الذي يظهر للمشتكي في صفحة «نتيجة الشكوى» قبل الإغلاق." });
+    if (closing && complaint.objection_at && !form.aresult.trim()) return setMsg({ type: "error", text: "اكتب الرد الذي يظهر للمعترض في صفحة الاعتراض قبل الإغلاق." });
     setBusy(true); setMsg(null);
     const args = { p_secret: secret, p_session_at: dateTimeInputToIso(form.at), p_title: form.title, p_topic: form.topic,
                    p_referred_to: form.referred_to, p_result: form.result, p_status: form.status };
@@ -2424,7 +2440,7 @@ function SessionsSection({ secret, complaint, onApplied, onChanged, closeReq = 0
             </Field>
           )}
           {isClosed(form.status) && complaint.objection_at && (
-            <Field label="⚖️ النص الذي يظهر للمعترض" hint="اختياري — يراه المشتكى عليه في صفحة الاعتراض" full>
+            <Field label="⚖️ الرد الذي يظهر للمعترض" required hint="يراه المشتكى عليه في صفحة الاعتراض" full>
               <textarea style={{ minHeight: 60 }} value={form.aresult} onChange={set("aresult")} maxLength={2000} />
             </Field>
           )}
@@ -2860,6 +2876,201 @@ function AdminGuide({ isManager }) {
       </div>
     </div>
   );
+}
+
+// ---------------------------------------------------------------------
+// المؤشرات (للمدير والموظف): أرقام الشكاوى للموسم والفترة المختارين — بطاقات رئيسية، توزيع الحالات،
+// التصنيفات، الصفات، الجهات المحال إليها، والوارد يومياً — مع تصدير تقرير Word بالترويسة الرسمية
+// ---------------------------------------------------------------------
+// قائمة أشرطة أفقية: الاسم، الشريط (طوله نسبة إلى الأكبر)، والعدد مع نسبته من المجموع
+function BarList({ items, total }) {
+  const max = Math.max(1, ...items.map(i => i.value));
+  if (!items.length) return <p className="muted" style={{ margin: 0 }}>لا توجد بيانات.</p>;
+  return (
+    <div className="bars">
+      {items.map(it => {
+        const pct = total ? Math.round(it.value / total * 100) : 0;
+        return (
+          <div key={it.label} className="bar-row" title={`${it.label}: ${it.value} (${pct}%)`}>
+            <span className="bar-label">{it.label}</span>
+            <span className="bar-track"><span className={`bar-fill ${it.cls || ""}`} style={{ width: `${Math.max(2, it.value / max * 100)}%` }} /></span>
+            <span className="bar-value">{it.value} <small>{pct}%</small></span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// أعمدة الوارد يومياً (عمود لكل يوم، الأحدث على اليسار)، مع تاريخ أول يوم وآخره
+function DayColumns({ days }) {
+  const max = Math.max(1, ...days.map(d => d.value));
+  return (
+    <div>
+      <div className="cols">
+        {days.map(d => (
+          <span key={d.key} className="col" title={`${d.label}: ${d.value} شكوى`}>
+            <span className={`col-fill ${d.value ? "" : "zero"}`} style={{ height: d.value ? `${d.value / max * 100}%` : "2px" }} />
+          </span>
+        ))}
+      </div>
+      <div className="cols-axis"><span>{days[0] && days[0].label}</span><span>أعلى يوم: {max} شكوى</span><span>{days.length > 0 && days[days.length - 1].label}</span></div>
+    </div>
+  );
+}
+
+// تجميع عدد الشكاوى حسب قيمة (مرتّبة من الأكثر)، وما زاد عن limit يُجمع في «أخرى»
+function countBy(list, get, limit = 8) {
+  const m = new Map();
+  list.forEach(c => { const k = (get(c) || "").trim() || "غير محدد"; m.set(k, (m.get(k) || 0) + 1); });
+  const all = [...m.entries()].map(([label, value]) => ({ label, value })).sort((a, b) => b.value - a.value);
+  if (all.length <= limit) return all;
+  const rest = all.slice(limit - 1).reduce((s, x) => s + x.value, 0);
+  return [...all.slice(0, limit - 1), { label: "أخرى", value: rest }];
+}
+
+function AdminIndicators({ secret, rows }) {
+  // الموسم والفترة، الجلسات والإحالات (تُجلب مرة)، وحالة التصدير
+  const [season, setSeason] = useState(null);
+  const [period, setPeriod] = useState("all");
+  const [sessions, setSessions] = useState([]);
+  const [refs, setRefs] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+  useEffect(() => {
+    sb.rpc("admin_get_season", { p_secret: secret }).then(({ data }) => setSeason(data && data.current ? data.current : ""));
+    sb.rpc("admin_list_sessions", { p_secret: secret, p_complaint_id: null }).then(({ data }) => setSessions(data || []));
+    sb.rpc("admin_list_referrals", { p_secret: secret }).then(({ data }) => setRefs(data || []));
+  }, [secret]);
+
+  // الشكاوى ضمن الموسم والفترة
+  const now = Date.now();
+  const from = period === "7" ? now - 7 * DAY : period === "30" ? now - 30 * DAY
+    : period === "month" ? new Date(new Date().getFullYear(), new Date().getMonth(), 1).getTime() : 0;
+  const all = rows || [];
+  const seasons = [...new Set(all.map(c => c.season).filter(Boolean))].sort().reverse();
+  const list = all.filter(c => (!season || c.season === season) && new Date(c.received_date).getTime() >= from);
+  const nums = new Set(list.map(c => c.complaint_number));
+
+  // البطاقات الرئيسية
+  const total = list.length;
+  const closedList = list.filter(c => isClosed(c.status));
+  const open = total - closedList.length;
+  const closeRate = total ? Math.round(closedList.length / total * 100) : 0;
+  const durations = closedList.filter(c => c.closed_date).map(c => (new Date(c.closed_date) - new Date(c.received_date)) / DAY);
+  const avgDays = durations.length ? (durations.reduce((a, b) => a + b, 0) / durations.length).toFixed(1) : "—";
+  const late = list.filter(c => !isClosed(c.status) && now - new Date(c.received_date) >= RULES.LATE_DAYS * DAY).length;
+  const objections = list.filter(c => c.objection_at).length;
+  const fresh = list.filter(c => c.status === "جديد").length;
+  const sess = sessions.filter(s => nums.has(s.complaint_number));
+  const kpis = [
+    { label: "إجمالي الشكاوى", value: total },
+    { label: "مفتوحة", value: open, tone: "open" },
+    { label: "مغلقة", value: closedList.length, tone: "closed" },
+    { label: "نسبة الإغلاق", value: `${closeRate}%`, tone: "closed" },
+    { label: "متوسط مدة الإغلاق", value: avgDays === "—" ? "—" : `${avgDays} يوم` },
+    { label: `متأخرة (أكثر من ${RULES.LATE_DAYS} أيام)`, value: late, tone: late ? "hot" : "" },
+    { label: "جديدة لم تُفتح", value: fresh, tone: fresh ? "warm" : "" },
+    { label: "اعتراضات", value: objections },
+    { label: "الجلسات", value: sess.length },
+  ];
+
+  // التوزيعات
+  const byStatus = STATUSES.map(s => ({ label: s, value: list.filter(c => c.status === s).length, cls: stClass(s) })).filter(x => x.value);
+  const byClass = countBy(list, c => c.classification);
+  const byCRole = countBy(list, c => c.complainant_role, 6);
+  const byARole = countBy(list, c => c.accused_role, 6);
+  const byRef = countBy(refs.filter(r => nums.has(r.complaint_number)), r => r.referred_to, 8);
+
+  // الوارد يومياً: آخر 30 يوماً (أو أيام الفترة المختارة)
+  const span = period === "7" ? 7 : 30;
+  const days = Array.from({ length: span }, (_, i) => {
+    const d = new Date(); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() - (span - 1 - i));
+    const key = toDateInput(d);
+    return { key, label: fmtDate(d), value: list.filter(c => toDateInput(new Date(c.received_date)) === key).length };
+  });
+
+  // تصدير التقرير إلى Word بالترويسة الرسمية
+  const scope = `${season ? `موسم ${season}` : "كل المواسم"} — ${{ all: "كل الفترة", "7": "آخر 7 أيام", "30": "آخر 30 يوماً", month: "هذا الشهر" }[period]}`;
+  async function exportReport() {
+    setBusy(true); setMsg(null);
+    try {
+      await exportIndicatorsWord(scope, kpis, [
+        { title: "توزيع الحالات", items: byStatus }, { title: "حسب التصنيف", items: byClass },
+        { title: "صفة المشتكي", items: byCRole }, { title: "صفة المشتكى عليه", items: byARole },
+        { title: "الجهات المحال إليها", items: byRef },
+      ], total);
+    } catch (e) { setMsg({ type: "error", text: e.message || NET_ERR }); }
+    setBusy(false);
+  }
+
+  // العرض: أدوات الموسم والفترة والتصدير، البطاقات، ثم بطاقات الرسوم
+  if (rows === null || season === null) return <Loading />;
+  return (
+    <div>
+      {msg && <Alert type={msg.type}>{msg.text}</Alert>}
+      <div className="row ind-tools">
+        <select value={season} onChange={e => setSeason(e.target.value)} aria-label="الموسم">
+          <option value="">كل المواسم</option>
+          {seasons.map(x => <option key={x} value={x}>موسم {x}</option>)}
+        </select>
+        <select value={period} onChange={e => setPeriod(e.target.value)} aria-label="الفترة">
+          <option value="all">كل الفترة</option>
+          <option value="month">هذا الشهر</option>
+          <option value="30">آخر 30 يوماً</option>
+          <option value="7">آخر 7 أيام</option>
+        </select>
+        <button type="button" className="btn" disabled={busy} onClick={exportReport}>{busy ? "جارٍ التجهيز…" : "📄 تقرير المؤشرات (Word)"}</button>
+      </div>
+
+      <div className="ind-kpis">
+        {kpis.map(k => <div key={k.label} className={`ind-kpi ${k.tone || ""}`}><div className="label">{k.label}</div><div className="value">{k.value}</div></div>)}
+      </div>
+
+      <div className="ind-grid">
+        <div className="card"><h2>توزيع الحالات</h2><BarList items={byStatus} total={total} /></div>
+        <div className="card"><h2>الشكاوى حسب التصنيف</h2><BarList items={byClass} total={total} /></div>
+        <div className="card ind-wide"><h2>الوارد يومياً — آخر {span} يوماً</h2><DayColumns days={days} /></div>
+        <div className="card"><h2>صفة المشتكي</h2><BarList items={byCRole} total={total} /></div>
+        <div className="card"><h2>صفة المشتكى عليه</h2><BarList items={byARole} total={total} /></div>
+        <div className="card ind-wide"><h2>الجهات المحال إليها</h2><BarList items={byRef} total={byRef.reduce((s, x) => s + x.value, 0)} /></div>
+      </div>
+    </div>
+  );
+}
+
+// تقرير المؤشرات في Word: الترويسة، النطاق، جدول البطاقات، ثم جدول لكل توزيع (الاسم، العدد، النسبة)
+async function exportIndicatorsWord(scope, kpis, sections, total) {
+  const D = await loadDocx();
+  const { Document, Paragraph, TextRun, Table, TableRow, TableCell, WidthType, ImageRun, ShadingType, Header } = D;
+  const GREEN = "00594F", GREEN2 = "006E5C", INK = "333132", MUTED = "939598", SAND = "F5F1EA", FONT = "Arial";
+  const runs = (text, o = {}) => String(text == null || text === "" ? "—" : text).split(/(\d[\d\-:\/ .%]*\d%?|\d%?)/).filter(x => x !== "")
+    .map(part => new TextRun({ text: part, font: FONT, size: o.size || 24, bold: !!o.bold, color: o.color || INK, rightToLeft: !/^\d/.test(part) }));
+  const para = (text, o = {}) => new Paragraph({ bidirectional: true, spacing: { before: o.before || 0, after: o.after == null ? 80 : o.after }, children: runs(text, o) });
+  const cell = (text, head, w) => new TableCell({ width: { size: w, type: WidthType.PERCENTAGE }, margins: { top: 60, bottom: 60, left: 100, right: 100 },
+    shading: head ? { type: ShadingType.CLEAR, fill: SAND, color: "auto" } : undefined, children: [para(text, { bold: head, color: head ? GREEN : INK, after: 0 })] });
+  const table = (rowsArr, widths) => new Table({ visuallyRightToLeft: true, width: { size: 100, type: WidthType.PERCENTAGE },
+    rows: rowsArr.map((r, i) => new TableRow({ children: r.map((v, j) => cell(v, i === 0, widths[j])) })) });
+
+  const body = [
+    para("تقرير مؤشرات الشكاوى", { bold: true, size: 34, color: GREEN, after: 60 }),
+    para(scope, { color: MUTED, after: 200 }),
+    table([["المؤشر", "القيمة"], ...kpis.map(k => [k.label, String(k.value)])], [60, 40]),
+  ];
+  sections.forEach(sec => {
+    const sum = sec.items.reduce((s, x) => s + x.value, 0) || total;
+    body.push(para(sec.title, { bold: true, size: 28, color: GREEN2, before: 280, after: 120 }));
+    body.push(sec.items.length
+      ? table([["البند", "العدد", "النسبة"], ...sec.items.map(x => [x.label, String(x.value), `${sum ? Math.round(x.value / sum * 100) : 0}%`])], [60, 20, 20])
+      : para("لا توجد بيانات.", { color: MUTED }));
+  });
+  body.push(para(`أُعدّ من منصة الشكاوى في ${xlDate(new Date())}`, { size: 18, color: MUTED, before: 400 }));
+
+  const letterhead = await fetchBytes("letterhead.jpg");
+  const headers = letterhead ? { default: new Header({ children: [new Paragraph({ children: [
+    new ImageRun({ data: letterhead, transformation: { width: 660, height: 157 } })] })] }) } : undefined;
+  const doc = new Document({ sections: [{ headers, properties: { page: { margin: { top: letterhead ? 3000 : 1000, bottom: 1000, left: 1000, right: 1000, header: 450 } } }, children: body }] });
+  downloadBlob(await D.Packer.toBlob(doc), `تقرير-المؤشرات-${toDateInput(new Date())}.docx`);
 }
 
 // ---------------------------------------------------------------------
@@ -3570,7 +3781,7 @@ function App() {
   return (
     <>
       <Header label={label} onLogout={logout} />
-      <main className="container">{page}</main>
+      <main className={`container${hash === "#/admin" && adminSecret ? " admin-wide" : ""}`}>{page}</main>
     </>
   );
 }

@@ -78,6 +78,7 @@
     2026-09-30  تنسيقات الشاشة الرئيسية للأدمن (.tile / .home-tiles / .section-bar).
     2026-09-30  تنسيقات خطوات نموذج الشكوى (.steps / .step-buttons).
     2026-09-30  لون حالة «مغلقة بعد الاعتراض» (.st-closedobj).
+    2026-10-01  القائمة الجانبية في أقصى اليمين (.admin-wide)؛ تنسيقات المؤشرات (.ind-* / .bars / .cols).
     2026-09-30  القائمة الجانبية للوحة الإدارة (.admin-shell / .side / .side-item …) ومنزلقة على الجوال.
     2026-09-30  تنسيقات دليل المنصة (.flow / .flow-step / .flow-label).
     2026-09-30  تنسيقات القرارات الإدارية (.adv-search / .dec-tag).
@@ -382,6 +383,38 @@
   .obj-tag { display: inline-block; margin-inline-start: 6px; padding: 0 8px; border-radius: 999px; background: #fcebf2; color: #b8336a; font-size: 12.5px; font-weight: 800; }
   .locked-note { margin-top: 14px; padding: 10px 12px; border-radius: 10px; background: #eee9df; color: var(--ink); font-weight: 700; text-align: center; }
 
+  /* المؤشرات: أدوات الفترة، بطاقات الأرقام، أشرطة أفقية بلون واحد (والحالات بألوانها)، وأعمدة الوارد يومياً */
+  .ind-tools { margin-bottom: 14px; }
+  .ind-tools select { width: auto; min-width: 150px; }
+  .ind-kpis { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; margin-bottom: 16px; }
+  .ind-kpi { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; box-shadow: var(--shadow); border-top: 4px solid var(--brand); }
+  .ind-kpi .label { color: var(--muted); font-size: 13px; font-weight: 700; }
+  .ind-kpi .value { font-size: 28px; font-weight: 800; color: var(--ink); line-height: 1.25; font-variant-numeric: tabular-nums; }
+  .ind-kpi.closed { border-top-color: var(--brand-light); }
+  .ind-kpi.open { border-top-color: var(--gold); }
+  .ind-kpi.hot { border-top-color: var(--danger); }
+  .ind-kpi.hot .value { color: var(--danger); }
+  .ind-kpi.warm { border-top-color: #e08a1e; }
+  .ind-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+  .ind-grid .card { margin: 0; }
+  .ind-grid .card h2 { font-size: 16px; }
+  .ind-wide { grid-column: 1 / -1; }
+  .bars { display: grid; gap: 8px; }
+  .bar-row { display: grid; grid-template-columns: minmax(90px, 34%) 1fr auto; align-items: center; gap: 10px; font-size: 14px; }
+  .bar-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bar-track { height: 12px; background: #f0ece4; border-radius: 4px; overflow: hidden; }
+  .bar-fill { display: block; height: 100%; background: var(--brand); border-radius: 4px; }
+  .bar-fill[class*="st-"] { background: var(--st); }
+  .bar-value { font-weight: 800; font-variant-numeric: tabular-nums; min-width: 64px; text-align: left; }
+  .bar-value small { color: var(--muted); font-weight: 600; }
+  .cols { display: flex; align-items: flex-end; gap: 3px; height: 140px; padding-top: 6px; border-bottom: 1px solid var(--line); }
+  .col { flex: 1; height: 100%; display: flex; align-items: flex-end; }
+  .col-fill { display: block; width: 100%; background: var(--brand-light); border-radius: 4px 4px 0 0; }
+  .col-fill.zero { background: var(--line); }
+  .col:hover .col-fill { background: var(--brand); }
+  .cols-axis { display: flex; justify-content: space-between; color: var(--muted); font-size: 12px; margin-top: 6px; }
+  @media (max-width: 760px) { .ind-grid { grid-template-columns: 1fr; } }
+
   /* دليل المنصة: تسلسل الحالات (شارات وأسهم تلتف على الجوال) */
   .flow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
   .flow-step { display: inline-flex; flex-direction: column; align-items: center; color: var(--muted); line-height: 1.1; }
@@ -416,10 +449,13 @@
   .tile.warm .tile-count { background: #e08a1e; color: #fff; }
   .tile.ok .tile-count { background: #d4ece8; color: #00594f; }
   /* لوحة الإدارة: قائمة جانبية على اليمين + المحتوى؛ القائمة بلون الهوية الداكن، والعنصر النشط أبيض بشريط ذهبي */
-  .admin-shell { display: grid; grid-template-columns: 250px minmax(0, 1fr); gap: 22px; align-items: start; }
-  .admin-main { min-width: 0; }
-  .side { position: sticky; top: 16px; background: linear-gradient(180deg, var(--brand-dark), #00463e); color: #fff;
-          border-radius: 18px; padding: 14px 10px 16px; box-shadow: 0 6px 24px rgba(0, 89, 79, .25); }
+  /* لوحة الإدارة بعرض الشاشة: القائمة ملتصقة بأقصى اليمين بطول الصفحة، والمحتوى بجانبها */
+  .container.admin-wide { max-width: none; padding: 0; }
+  .admin-shell { display: grid; grid-template-columns: 260px minmax(0, 1fr); align-items: stretch; min-height: calc(100vh - 64px); }
+  .admin-main { min-width: 0; width: 100%; max-width: 1200px; margin: 0 auto; padding: 22px 22px calc(48px + env(safe-area-inset-bottom, 0px)); }
+  .side { position: sticky; top: 0; align-self: start; height: calc(100vh - 64px); overflow-y: auto;
+          background: linear-gradient(180deg, var(--brand-dark), #00463e); color: #fff;
+          border-radius: 0 0 0 18px; padding: 16px 10px; box-shadow: -2px 0 18px rgba(0, 89, 79, .18); }
   .side-head { display: flex; align-items: center; gap: 10px; padding: 4px 8px 14px; margin-bottom: 8px; border-bottom: 1px solid rgba(255,255,255,.14); }
   .side-who { flex: 1; min-width: 0; line-height: 1.3; }
   .side-who b { display: block; font-size: 15.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -444,8 +480,9 @@
   .only-phone { display: none; }
   /* الجوال والشاشات الصغيرة: القائمة تنزلق من اليمين فوق خلفية معتمة، وتُفتح بزر ☰ */
   @media (max-width: 899px) {
-    .admin-shell { display: block; }
-    .side { position: fixed; top: 0; bottom: 0; right: 0; width: min(290px, 84vw); z-index: 70; overflow-y: auto; border-radius: 18px 0 0 18px;
+    .admin-shell { display: block; min-height: 0; }
+    .admin-main { padding: 18px 16px calc(48px + env(safe-area-inset-bottom, 0px)); }
+    .side { position: fixed; top: 0; bottom: 0; right: 0; height: auto; width: min(290px, 84vw); z-index: 70; overflow-y: auto; border-radius: 18px 0 0 18px;
             padding-top: calc(14px + env(safe-area-inset-top, 0px)); transform: translateX(105%); visibility: hidden;
             transition: transform .24s ease, visibility .24s; }
     .side.open { transform: none; visibility: visible; }
@@ -577,6 +614,6 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4"></script>
 
 <!-- كود التطبيق جاهزاً (مولَّد من src/app.jsx بالأمر python build.py) -->
-<script src="app.js?v=a16bb7ee92"></script>
+<script src="app.js?v=316b8ea3ad"></script>
 </body>
 </html>
