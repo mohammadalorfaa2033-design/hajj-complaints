@@ -66,6 +66,7 @@
 --    2026-09-30  القسم 28: حالة «مغلقة بعد الاعتراض» (جلسة الإغلاق بعد الاعتراض) وتحويل الشكاوى الموجودة إليها.
 --    2026-09-30  القسم 29: إلغاء الأرشفة على Google Drive (حذف archive_export و set_archive_key من القسم 25 ومن القاعدة).
 --    2026-10-01  القسم 26: قيد الحالات يشمل «مغلقة بعد الاعتراض» أيضاً (كان يفشل إن نُفّذ القسم 28 قبله).
+--    2026-10-01  القسم 30: مكان الجلسة (sessions.location) وقائمة «جهات الإحالة» (referral_targets).
 -- =====================================================================
 
 -- ---------------------------------------------------------------------
@@ -183,6 +184,8 @@ drop table if exists public.decisions cascade;
 drop function if exists public.admin_list_decisions(text);
 drop function if exists public.admin_save_decision(text, uuid, text, date, text, text, text, text);
 drop function if exists public.admin_delete_decision(text, uuid);
+drop function if exists public.admin_add_session(text, uuid, timestamptz, text, text, text, text, text, text);
+drop function if exists public.admin_update_session(text, uuid, timestamptz, text, text, text, text, text, text);
 drop function if exists public.submit_complaint(text, text, text, text, text, text, text, text, text);
 drop function if exists public.admin_add_session(text, uuid, timestamptz, text, text, text, text, text);
 drop function if exists public.admin_update_session(text, uuid, timestamptz, text, text, text, text, text);
@@ -2952,7 +2955,164 @@ drop function if exists public.set_archive_key(text);
 delete from public.app_settings where key = 'archive_hash';
 
 -- ---------------------------------------------------------------------
--- 30) كلمة مرور الأدمن الأولى — غيّر 'غيّرني-123' قبل التنفيذ (6 أحرف على الأقل)
+-- 30) مكان الجلسة، وقائمة جهات الإحالة
+--     - «المكان / الوصف» لكل جلسة (sessions.location)
+--     - قائمة «جهات الإحالة» في app_settings (referral_targets) تُختار منها الإحالة بدل كتابتها كل مرة؛
+--       تبدأ بالجهات المستخدمة سابقاً، ويعدّلها المدير من «الإعدادات»
+--     يحتاج الأقسام 24 و26 و28 قبله؛ ويُنفَّذ وحده كتحديث لقاعدة موجودة (لا يحذف بيانات)
+-- ---------------------------------------------------------------------
+-- الحقل الجديد
+alter table public.sessions add column if not exists location text;   -- مكان الجلسة أو وصفها
+
+-- قائمة جهات الإحالة الأولى: كل جهة استُخدمت في الشكاوى أو الجلسات (لا تُستبدل إن كانت موجودة)
+insert into public.app_settings (key, value)
+select 'referral_targets', coalesce(to_json(array_agg(t order by t))::text, '[]')
+from (select distinct btrim(referred_to) as t from public.complaints where coalesce(btrim(referred_to), '') <> ''
+      union
+      select distinct btrim(referred_to) from public.sessions where coalesce(btrim(referred_to), '') <> '') x
+on conflict (key) do nothing;
+
+-- القوائم للأدمن (نسخة تضيف «جهات الإحالة»)
+create or replace function public.admin_get_lists(p_secret text)
+returns json
+language plpgsql security definer set search_path = public as $$
+begin
+  if public.verify_password('أدمن', p_secret) is null then
+    return null;
+  end if;
+  return json_build_object(
+    'classifications',  coalesce(public.setting('classifications'), '[]')::json,
+    'roles',            coalesce(public.setting('roles'), '[]')::json,
+    'decision_classes', coalesce(public.setting('decision_classes'), '[]')::json,
+    'referral_targets', coalesce(public.setting('referral_targets'), '[]')::json);
+end $$;
+
+-- حفظ قائمة (نسخة تقبل referral_targets؛ للمدير فقط)
+create or replace function public.admin_set_list(p_secret text, p_key text, p_items text[])
+returns text
+language plpgsql security definer set search_path = public as $$
+declare
+  v_items text[];
+begin
+  if public.verify_password('مدير', p_secret) is null
+     or p_key not in ('classifications', 'roles', 'decision_classes', 'referral_targets') then
+    return 'INVALID';
+  end if;
+  select coalesce(array_agg(x order by o), '{}') into v_items from (
+    select btrim(left(x, 60)) as x, min(o) as o
+    from unnest(coalesce(p_items, '{}')) with ordinality as t(x, o)
+    where btrim(coalesce(x, '')) <> ''
+    group by btrim(left(x, 60))) u;
+  if cardinality(v_items) > 200 then
+    return 'INVALID';
+  end if;
+  insert into public.app_settings (key, value) values (p_key, to_json(v_items)::text)
+    on conflict (key) do update set value = excluded.value;
+  return 'OK';
+end $$;
+
+-- قائمة الجلسات (نسخة بالمكان)
+drop function if exists public.admin_list_sessions(text, uuid);
+create function public.admin_list_sessions(p_secret text, p_complaint_id uuid)
+returns table (id uuid, complaint_id uuid, complaint_number text, complainant_name text,
+               session_at timestamptz, title text, location text, topic text, referred_to text, result text, status text)
+language plpgsql security definer set search_path = public as $$
+begin
+  if public.verify_password('أدمن', p_secret) is null then
+    return;
+  end if;
+  return query
+    select s.id, s.complaint_id, c.complaint_number, c.complainant_name,
+           s.session_at, s.title, s.location, s.topic, s.referred_to, s.result, s.status
+    from public.sessions s
+    join public.complaints c on c.id = s.complaint_id
+    where p_complaint_id is null or s.complaint_id = p_complaint_id
+    order by s.session_at desc
+    limit 5000;
+end $$;
+
+-- إضافة جلسة (نسخة بالمكان؛ ممنوعة للشكوى المغلقة)
+drop function if exists public.admin_add_session(text, uuid, timestamptz, text, text, text, text, text);
+drop function if exists public.admin_add_session(text, uuid, timestamptz, text, text, text, text, text, text);
+create function public.admin_add_session(
+  p_secret text, p_complaint_id uuid, p_session_at timestamptz,
+  p_title text, p_location text, p_topic text, p_referred_to text, p_result text, p_status text
+) returns setof public.complaints
+language plpgsql security definer set search_path = public as $$
+begin
+  if public.verify_password('أدمن', p_secret) is null then
+    return;
+  end if;
+  if exists (select 1 from public.complaints where id = p_complaint_id and status in ('مغلقة', 'مغلقة بعد الاعتراض')) then
+    raise exception 'الشكوى مغلقة: يمكن تعديل جلساتها فقط';
+  end if;
+  insert into public.sessions (complaint_id, session_at, title, location, topic, referred_to, result, status)
+  values (p_complaint_id, coalesce(p_session_at, now()),
+          nullif(btrim(left(p_title, 200)), ''), nullif(btrim(left(p_location, 300)), ''), nullif(btrim(left(p_topic, 2000)), ''),
+          nullif(btrim(left(p_referred_to, 200)), ''), nullif(btrim(left(p_result, 2000)), ''), p_status);
+  return query select * from public.complaints where id = p_complaint_id;
+end $$;
+
+-- تعديل جلسة (نسخة بالمكان)
+drop function if exists public.admin_update_session(text, uuid, timestamptz, text, text, text, text, text);
+drop function if exists public.admin_update_session(text, uuid, timestamptz, text, text, text, text, text, text);
+create function public.admin_update_session(
+  p_secret text, p_id uuid, p_session_at timestamptz,
+  p_title text, p_location text, p_topic text, p_referred_to text, p_result text, p_status text
+) returns setof public.complaints
+language plpgsql security definer set search_path = public as $$
+declare
+  v_cid uuid;
+begin
+  if public.verify_password('أدمن', p_secret) is null then
+    return;
+  end if;
+  update public.sessions set
+    session_at  = coalesce(p_session_at, session_at),
+    title       = nullif(btrim(left(p_title, 200)), ''),
+    location    = nullif(btrim(left(p_location, 300)), ''),
+    topic       = nullif(btrim(left(p_topic, 2000)), ''),
+    referred_to = nullif(btrim(left(p_referred_to, 200)), ''),
+    result      = nullif(btrim(left(p_result, 2000)), ''),
+    status      = p_status
+  where id = p_id
+  returning complaint_id into v_cid;
+  return query select * from public.complaints where id = v_cid;
+end $$;
+
+-- بطاقة التقارير (نسخة بمكان الجلسة)
+create or replace function public.viewer_complaint_card(p_code text, p_number text)
+returns json
+language plpgsql security definer set search_path = public as $$
+declare
+  v_id uuid;
+begin
+  if public.verify_password('إدارة', p_code) is null
+     or coalesce(public.setting('report_card_enabled'), 'off') <> 'on' then
+    return null;
+  end if;
+  select id into v_id from public.complaints where complaint_number = p_number;
+  if v_id is null then
+    return null;
+  end if;
+  return json_build_object(
+    'complaint', (select row_to_json(x) from (
+        select complaint_number, received_date, complainant_name, complainant_role, phone_number, contact_number,
+               accused_name, accused_role, title, subject, classification, referred_to, status, result,
+               complainant_result, accused_result, closed_date, objection_text, objection_at
+        from public.complaints where id = v_id) x),
+    'sessions', coalesce((select json_agg(s order by s.session_at desc) from (
+        select session_at, title, location, topic, referred_to, result, status from public.sessions where complaint_id = v_id) s), '[]'::json));
+end $$;
+
+-- السماح للموقع باستدعاء الدوال الجديدة والمستبدلة
+grant execute on function public.admin_list_sessions(text, uuid)                                               to anon, authenticated;
+grant execute on function public.admin_add_session(text, uuid, timestamptz, text, text, text, text, text, text)    to anon, authenticated;
+grant execute on function public.admin_update_session(text, uuid, timestamptz, text, text, text, text, text, text) to anon, authenticated;
+grant execute on function public.viewer_complaint_card(text, text)                                             to anon, authenticated;
+
+-- ---------------------------------------------------------------------
+-- 31) كلمة مرور الأدمن الأولى — غيّر 'غيّرني-123' قبل التنفيذ (6 أحرف على الأقل)
 -- ---------------------------------------------------------------------
 insert into public.access_passwords (role, password, holder_name)
 values ('أدمن', 'غيّرني-123', 'المدير');

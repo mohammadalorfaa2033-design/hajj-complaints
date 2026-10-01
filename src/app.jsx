@@ -31,6 +31,10 @@
 //    2026-10-01  القائمة الجانبية في أقصى يمين الشاشة؛ قسم «📈 المؤشرات» (بطاقات، توزيع الحالات والتصنيفات والصفات
 //                والإحالات، الوارد يومياً، وتقرير Word بالترويسة)؛ رد المعترض إلزامي عند الإغلاق بعد الاعتراض؛
 //                زر 🎤 للتحدث في صفحة الاعتراض.
+//    2026-10-01  قائمة منسدلة لـ«ترحيل / مُحالة إلى» مع «➕ جهة جديدة» وقائمة «جهات الإحالة» في الإعدادات؛ بطاقة الشكوى
+//                بتبويبات (المتابعة، الجلسات، النتائج، الاعتراض) بعد المعلومات الأساسية؛ الترويسة في أعلى القائمة الجانبية
+//                والمستخدم في أسفلها؛ «دليل المنصة» بجانب «خروج»؛ «المكان / الوصف» للجلسة؛ التصدير واستعراض النسخ
+//                في «الإعدادات» فقط؛ رئيسية تملأ الشاشة (التاريخ الهجري، المطلوب الآن، أحدث الشكاوى، الجلسات القادمة).
 // =======================================================================
 // استيراد خطافات React المستخدمة في المكونات
 const { useState, useEffect, useCallback } = React;
@@ -45,6 +49,9 @@ const isConfigured = !!cfg.SUPABASE_URL && !cfg.SUPABASE_URL.includes("YOUR_") &
 const CLASSIFICATIONS = [...(cfg.CLASSIFICATIONS || ["أخرى"])];
 const ROLES = [...(cfg.ROLES || ["حاج", "مرافق", "رئيس مجموعة", "مشرف", "مندوب", "موظف", "سائق"])];
 const DECISION_CLASSES = ["تنظيمي", "إداري", "مالي", "تأديبي", "تعميم", "أخرى"];   // تصنيفات القرارات (تُستبدل من الإعدادات)
+const REFERRAL_TARGETS = [];   // جهات الإحالة (من الإعدادات)
+// سياق لوحة الإدارة لمكوّنات صغيرة لا تصلها الخصائص: كلمة السر، هل هو مدير، والجهات المستخدمة في الشكاوى
+const ADMIN_CTX = { secret: null, manager: false, used: [] };
 const replaceList = (list, items) => { if (Array.isArray(items) && items.length) list.splice(0, list.length, ...items); };
 
 // حالات الشكوى (تطابق القيد في schema.sql) واسم لاتيني لكل حالة لاستخدامه في الألوان
@@ -178,6 +185,7 @@ function buildComplaintDoc(D, c, sess, logo, letterhead) {
   const after = objAt === null ? [] : sess.filter(s => new Date(s.session_at).getTime() >= objAt);
   const sessionsBlock = list => !list.length ? [para("لا توجد جلسات.", { color: MUTED })] : list.flatMap(s => [
     para(`الجلسة ${sess.indexOf(s) + 1}${s.title ? " — " + s.title : ""} (${xlDate(s.session_at)})`, { bold: true, size: 26, color: GREEN2, before: 160 }),
+    ...(s.location ? [para(`المكان: ${s.location}`, { color: MUTED, after: 60 })] : []),
     para("موضوع الجلسة:", { bold: true, after: 40 }), ...box(s.topic),
     para("نتيجة الجلسة:", { bold: true, before: 80, after: 40 }), ...box(s.result),
   ]);
@@ -268,8 +276,8 @@ async function exportAllToExcel(secret, complaints) {
                 xlDate(c.reminder_at), c.reminder_note, c.objection_summary, xlDate(c.objection_deadline), c.objection_extension_reason, c.objection_text,
                 xlDate(c.objection_at), xlDate(c.updated_at)]) },
     { name: "الجلسات",
-      headers: ["رقم الشكوى", "المشتكي", "تاريخ ووقت الجلسة", "عنوان الجلسة", "موضوع الجلسة", "مُحالة إلى", "نتيجة الجلسة", "حالة الشكوى"],
-      rows: sess.map(x => [x.complaint_number, x.complainant_name, xlDate(x.session_at), x.title, x.topic, x.referred_to, x.result, x.status]) },
+      headers: ["رقم الشكوى", "المشتكي", "تاريخ ووقت الجلسة", "عنوان الجلسة", "المكان", "موضوع الجلسة", "مُحالة إلى", "نتيجة الجلسة", "حالة الشكوى"],
+      rows: sess.map(x => [x.complaint_number, x.complainant_name, xlDate(x.session_at), x.title, x.location, x.topic, x.referred_to, x.result, x.status]) },
     { name: "الإحالات",
       headers: ["رقم الشكوى", "تاريخ الإحالة", "مُحالة إلى"],
       rows: refs.map(x => [x.complaint_number, xlDate(x.referred_at), x.referred_to]) },
@@ -986,7 +994,7 @@ const SECTIONS = {
 
 // صفحة الأدمن: شاشة رئيسية بأزرار كبيرة، وكل قسم يُفتح وحده مع زر «🏠 الرئيسية» للعودة
 // (زر الرجوع في الجوال يعود أيضاً إلى الرئيسية). الموظف يرى الأقسام الأساسية فقط، والمدير يرى الكل
-function AdminPage({ secret }) {
+function AdminPage({ secret, onLogout }) {
   // القسم الحالي (home = الشاشة الرئيسية)، الشكاوى (تُجلب مرة واحدة لكل الأقسام)، الشكوى المفتوحة،
   // ورقم نسخة الجلسات (يزيد عند إضافة/تعديل جلسة فيُعاد جلب قسم الجلسات)
   const [tab, setTab] = useState("home");
@@ -1030,7 +1038,7 @@ function AdminPage({ secret }) {
     sb.rpc("admin_get_lists", { p_secret: secret }).then(({ data }) => {
       if (!data) return;
       replaceList(CLASSIFICATIONS, data.classifications); replaceList(ROLES, data.roles);
-      replaceList(DECISION_CLASSES, data.decision_classes); setListsVer(n => n + 1);
+      replaceList(DECISION_CLASSES, data.decision_classes); replaceList(REFERRAL_TARGETS, data.referral_targets); setListsVer(n => n + 1);
     });
   }, [secret]);
 
@@ -1060,6 +1068,10 @@ function AdminPage({ secret }) {
   const section = SECTIONS[tab];
   const allowed = tab === "home" || (section && (isManager || !section.manager));
 
+  // سياق المكوّنات الصغيرة (قائمة الإحالة): كلمة السر، الدور، والجهات المستخدمة في الشكاوى
+  ADMIN_CTX.secret = secret; ADMIN_CTX.manager = isManager;
+  ADMIN_CTX.used = [...new Set((rows || []).map(r => (r.referred_to || "").trim()).filter(Boolean))];
+
   // الأعداد على عناصر القائمة: المطلوب اليوم، والشكاوى الجديدة
   const counts = { today: (rows || []).filter(c => dueAlerts(c).length > 0).length, complaints: (rows || []).filter(c => c.status === "جديد").length };
   const current = allowed ? tab : "home";
@@ -1072,12 +1084,17 @@ function AdminPage({ secret }) {
       {menuOpen && <div className="side-backdrop" onClick={() => setMenuOpen(false)} />}
       <SideNav me={me} isManager={isManager} current={current} counts={counts} open={menuOpen} onPick={pick} onClose={() => setMenuOpen(false)} />
       <div className="admin-main">
-        <div className="section-bar">
+        <div className="admin-top">
           <button type="button" className="btn secondary menu-btn" onClick={() => setMenuOpen(true)} aria-label="فتح القائمة">☰</button>
-          <h2>{current === "home" ? "🏠 الرئيسية" : section.title}</h2>
+          <span className="only-phone"><Logo size={30} /></span>
+          <h2 className="admin-title">{current === "home" ? "🏠 الرئيسية" : section.title}</h2>
+          <div className="admin-top-actions">
+            <button type="button" className={`btn secondary sm ${current === "guide" ? "is-on" : ""}`} onClick={() => pick("guide")}>📘 <span className="hide-xs">دليل المنصة</span></button>
+            {onLogout && <button type="button" className="btn sm" onClick={onLogout}>خروج</button>}
+          </div>
         </div>
         {error && <Alert type="error">{error}</Alert>}
-        {current === "home" && <AdminHome me={me} isManager={isManager} rows={rows} go={go} />}
+        {current === "home" && <AdminHome me={me} isManager={isManager} rows={rows} go={go} secret={secret} onOpen={openComplaint} />}
         {current === "today" && <AdminDue secret={secret} rows={rows} onSaved={onSaved} reload={reload} onOpen={c => openComplaint(c, true)} />}
         {current === "links" && <AdminLinks secret={secret} isManager={isManager} />}
         {current === "decisions" && <AdminDecisions secret={secret} isManager={isManager} />}
@@ -1105,11 +1122,12 @@ function AdminPage({ secret }) {
 
 // عناصر القائمة الجانبية: المفتاح، الأيقونة، والاسم (الأقسام العامة، ثم أقسام المدير)
 const NAV_MAIN = [["home", "🏠", "الرئيسية"], ["indicators", "📈", "المؤشرات"], ["today", "📅", "المطلوب اليوم"], ["complaints", "📋", "الشكاوى"],
-                  ["sessions", "🗓️", "الجلسات"], ["decisions", "📑", "القرارات الإدارية"], ["guide", "📘", "دليل المنصة"]];
+                  ["sessions", "🗓️", "الجلسات"], ["decisions", "📑", "القرارات الإدارية"]];
 const NAV_MANAGER = [["links", "🔗", "إرسال رابط"], ["access", "🔐", "دخول المشتكين"], ["viewers", "📊", "كلمات مرور الإدارة"],
                      ["staff", "👥", "الموظفون"], ["settings", "⚙️", "الإعدادات"]];
 
-// القائمة الجانبية: الشعار واسم المستخدم ودوره، ثم الأقسام بأعدادها؛ على الجوال تنزلق من اليمين
+// القائمة الجانبية: الترويسة (الشعار واسم الإدارة) في أعلاها، ثم الأقسام بأعدادها، واسم المستخدم ودوره في أسفلها؛
+// على الجوال تنزلق من اليمين
 function SideNav({ me, isManager, current, counts, open, onPick, onClose }) {
   // عنصر واحد: أيقونة، اسم، وعدد (إن وُجد)
   const item = ([key, icon, label]) => (
@@ -1123,8 +1141,8 @@ function SideNav({ me, isManager, current, counts, open, onPick, onClose }) {
   return (
     <aside className={`side ${open ? "open" : ""}`} aria-label="أقسام لوحة الإدارة">
       <div className="side-head">
-        <Logo size={42} />
-        <div className="side-who"><b>{me.name || (isManager ? "المدير" : "الموظف")}</b><small>{isManager ? "مدير" : "موظف"} · قسم الشكاوى</small></div>
+        <Logo size={44} />
+        <div className="side-who"><b>إدارة الحج والعمرة</b><small>قسم الشكاوى · الأدمن</small></div>
         <button type="button" className="side-close" onClick={onClose} aria-label="إغلاق القائمة">✕</button>
       </div>
       <nav className="side-nav">{NAV_MAIN.map(item)}</nav>
@@ -1134,21 +1152,35 @@ function SideNav({ me, isManager, current, counts, open, onPick, onClose }) {
           <nav className="side-nav">{NAV_MANAGER.map(item)}</nav>
         </>
       )}
+      <div className="side-user">
+        <span className="side-avatar">👤</span>
+        <div className="side-who"><b>{me.name || (isManager ? "المدير" : "الموظف")}</b><small>{isManager ? "مدير" : "موظف"} · قسم الشكاوى</small></div>
+      </div>
     </aside>
   );
 }
 
-// الرئيسية: ترحيب، بحث سريع، وبطاقات ملخص بأعداد (كل بطاقة تفتح قسمها)
-function AdminHome({ me, isManager, rows, go }) {
-  // نص البحث السريع
+// الرئيسية: ترحيب بالتاريخ الميلادي والهجري وبحث سريع، بطاقات ملخص، ثم ثلاث قوائم قصيرة تملأ الشاشة:
+// المطلوب الآن، أحدث الشكاوى، والجلسات القادمة (الضغط على أي سطر يفتح شكواه)
+function AdminHome({ me, isManager, rows, go, secret, onOpen }) {
+  // نص البحث السريع، والجلسات القادمة
   const [q, setQ] = useState("");
+  const [sess, setSess] = useState(null);
+  useEffect(() => {
+    sb.rpc("admin_list_sessions", { p_secret: secret, p_complaint_id: null }).then(({ data }) => setSess(data || []));
+  }, [secret]);
 
-  // الأعداد: المطلوب اليوم، الجديدة، المفتوحة، والمغلقة
+  // الأعداد والقوائم
   const list = rows || [];
-  const due = list.filter(c => dueAlerts(c).length > 0).length;
+  const dueList = list.filter(c => dueAlerts(c).length > 0);
   const fresh = list.filter(c => c.status === "جديد").length;
   const open = list.filter(c => !isClosed(c.status)).length;
   const closed = list.length - open;
+  const latest = [...list].sort((a, b) => new Date(b.received_date) - new Date(a.received_date)).slice(0, 6);
+  const sod = new Date(); sod.setHours(0, 0, 0, 0);
+  const upcoming = (sess || []).filter(s => new Date(s.session_at) >= sod).sort((a, b) => new Date(a.session_at) - new Date(b.session_at)).slice(0, 6);
+  const today = new Date();
+  const hijri = (() => { try { return new Intl.DateTimeFormat("ar-SA-u-ca-islamic-umalqura-nu-latn", { day: "numeric", month: "long", year: "numeric" }).format(today); } catch { return ""; } })();
 
   // بطاقة ملخص: أيقونة، عنوان، وعدد بلون
   const Tile = ({ icon, title, count, tone, onClick, sub }) => (
@@ -1160,21 +1192,57 @@ function AdminHome({ me, isManager, rows, go }) {
     </button>
   );
 
-  // العرض: الترحيب، البحث، ثم البطاقات
+  // العرض
   return (
-    <div>
-      <div className="home-hello">أهلاً{me.name ? ` ${me.name}` : ""} 👋 <span className="muted">· {isManager ? "مدير" : "موظف"}</span></div>
-      <form className="row home-search" style={{ flexWrap: "nowrap" }} onSubmit={e => { e.preventDefault(); go("complaints", { search: q.trim() }); }}>
-        <input type="search" value={q} onChange={e => setQ(e.target.value)} placeholder="🔍 ابحث برقم الشكوى أو الاسم أو الهاتف" />
-        <button className="btn">بحث</button>
-      </form>
+    <div className="home">
+      <div className="home-hero">
+        <div>
+          <div className="home-hello">أهلاً{me.name ? ` ${me.name}` : ""} 👋</div>
+          <div className="home-date">{today.toLocaleDateString("ar-u-nu-latn", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}{hijri && ` · ${hijri}`}</div>
+        </div>
+        <form className="row home-search" style={{ flexWrap: "nowrap" }} onSubmit={e => { e.preventDefault(); go("complaints", { search: q.trim() }); }}>
+          <input type="search" value={q} onChange={e => setQ(e.target.value)} placeholder="🔍 ابحث برقم الشكوى أو الاسم أو الهاتف" />
+          <button className="btn gold">بحث</button>
+        </form>
+      </div>
+
       <div className="home-tiles">
-        <Tile icon="📅" title="المطلوب اليوم" count={due} tone={due > 0 ? "hot" : "ok"} onClick={() => go("today")} sub={due > 0 ? "اضغط للمتابعة" : "لا شيء متأخر"} />
+        <Tile icon="📅" title="المطلوب اليوم" count={dueList.length} tone={dueList.length > 0 ? "hot" : "ok"} onClick={() => go("today")} sub={dueList.length > 0 ? "اضغط للمتابعة" : "لا شيء متأخر"} />
         <Tile icon="🆕" title="شكاوى جديدة" count={fresh} tone={fresh > 0 ? "warm" : ""} onClick={() => go("complaints", { filter: "جديد" })} sub="لم تُفتح بعد" />
         <Tile icon="📂" title="مفتوحة" count={open} onClick={() => go("complaints")} sub="قيد العمل" />
-        <Tile icon="✅" title="مغلقة" count={closed} tone="ok" onClick={() => go("complaints")} sub="هذا الموسم وما قبله" />
+        <Tile icon="✅" title="مغلقة" count={closed} tone="ok" onClick={() => go("complaints")} sub="كل المواسم" />
       </div>
-      <p className="muted home-hint">الأقسام في القائمة الجانبية{" "}<span className="only-phone">— اضغط ☰ في الأعلى لفتحها</span>.</p>
+
+      <div className="home-grid">
+        <div className="card home-list">
+          <div className="home-list-head"><h2>⏰ المطلوب الآن</h2><button type="button" className="btn secondary sm" onClick={() => go("today")}>الكل</button></div>
+          {dueList.length === 0 ? <p className="muted">لا شيء مطلوب الآن — كل الشكاوى في وضع جيد.</p> : (
+            <ul>{dueList.slice(0, 5).map(c => (
+              <li key={c.id} onClick={() => onOpen(c, true)}>
+                <b dir="ltr">{c.complaint_number}</b><span className="grow">{c.complainant_name}<small className="muted"> — {dueAlerts(c)[0].text}</small></span>
+              </li>))}</ul>
+          )}
+        </div>
+        <div className="card home-list">
+          <div className="home-list-head"><h2>🆕 أحدث الشكاوى</h2><button type="button" className="btn secondary sm" onClick={() => go("complaints")}>الكل</button></div>
+          {latest.length === 0 ? <p className="muted">لا توجد شكاوى بعد.</p> : (
+            <ul>{latest.map(c => (
+              <li key={c.id} onClick={() => onOpen(c)}>
+                <b dir="ltr">{c.complaint_number}</b><span className="grow">{c.title || c.complainant_name}<small className="muted"> — {fmtDate(c.received_date)}</small></span><StatusBadge value={c.status} />
+              </li>))}</ul>
+          )}
+        </div>
+        <div className="card home-list">
+          <div className="home-list-head"><h2>🗓️ الجلسات القادمة</h2><button type="button" className="btn secondary sm" onClick={() => go("sessions")}>الكل</button></div>
+          {sess === null ? <Loading /> : upcoming.length === 0 ? <p className="muted">لا توجد جلسات قادمة.</p> : (
+            <ul>{upcoming.map(s => (
+              <li key={s.id} onClick={() => onOpen({ id: s.complaint_id })}>
+                <b>{fmtDateTime(s.session_at)}</b><span className="grow">{s.title || s.complainant_name}{s.location && <small className="muted"> — 📍 {s.location}</small>}</span>
+              </li>))}</ul>
+          )}
+        </div>
+      </div>
+      <p className="muted home-hint only-phone">الأقسام في القائمة الجانبية — اضغط ☰ في الأعلى لفتحها.</p>
     </div>
   );
 }
@@ -1367,15 +1435,6 @@ function ComplaintsTable({ secret, rows, onSaved, onOpen, alertsFor }) {
     setBulk({ status: "", classification: "", referred_to: "", closed: "" });
   }
 
-  // تصدير كل الصفوف الظاهرة (بالترتيب الحالي والأعمدة الظاهرة) إلى ملف Excel ‎.xlsx
-  async function exportExcel() {
-    setMsg(null);
-    try {
-      await saveWorkbook([{ name: "الشكاوى", headers: cols.map(c => c.label), rows: sorted.map(r => cols.map(c => c.text(r))) }],
-        `الشكاوى-${toDateInput(new Date())}.xlsx`);
-    } catch (e) { setMsg({ type: "error", text: e.message || NET_ERR }); }
-  }
-
   // العرض: شريط التغيير الجماعي (عند الاختيار)، شريط الأدوات، الجدول، ثم التنقل بين الصفحات
   return (
     <div>
@@ -1387,7 +1446,7 @@ function ComplaintsTable({ secret, rows, onSaved, onOpen, alertsFor }) {
             <option value="">التصنيف (بلا تغيير)</option>
             {CLASSIFICATIONS.map(s => <option key={s}>{s}</option>)}
           </select>
-          <input type="text" placeholder="ترحيل / مُحالة إلى" value={bulk.referred_to} onChange={e => setBulk(b => ({ ...b, referred_to: e.target.value }))} />
+          <ReferralSelect value={bulk.referred_to} onChange={val => setBulk(b => ({ ...b, referred_to: val }))} placeholder="الإحالة (بلا تغيير)" />
           <button className="btn gold" disabled={busy} onClick={applyBulk}>{busy ? "جارٍ التطبيق…" : `تطبيق على ${chosen.length}`}</button>
           <button className="btn secondary" onClick={() => setSelected(new Set())}>إلغاء التحديد</button>
         </div>
@@ -1418,7 +1477,6 @@ function ComplaintsTable({ secret, rows, onSaved, onOpen, alertsFor }) {
           <button className="btn secondary sm" onClick={() => setFontSize(14)} aria-label="الحجم الافتراضي">{fontSize}</button>
           <button className="btn secondary sm" onClick={() => setFontSize(Math.min(22, fontSize + 1))} aria-label="تكبير الخط">A+</button>
         </div>
-        {rows.length > 0 && <button className="btn secondary sm tool-end" onClick={exportExcel}>⬇ تصدير Excel</button>}
       </div>
 
       <div className="card" style={{ padding: 0 }}>
@@ -1550,9 +1608,12 @@ function AdminSettings({ secret, rows, reload }) {
   // العرض: بطاقة الموسم، ثم بطاقة حمراء تحذيرية بما سيُحذف وما يبقى، وزر النسخة الاحتياطية والخانات
   return (
     <div>
+    <ExportCard secret={secret} rows={rows} />
     <SeasonCard secret={secret} reload={reload} />
     <ListCard secret={secret} listKey="classifications" list={CLASSIFICATIONS} title="🏷️ التصنيفات"
       hint="تظهر في تفاصيل الشكوى وفي تصفية جدول الشكاوى، مثل: تقييم المجموعات" />
+    <ListCard secret={secret} listKey="referral_targets" list={REFERRAL_TARGETS} title="↗️ جهات الإحالة"
+      hint="تظهر في قائمة «ترحيل / مُحالة إلى» في الشكوى والجلسة (ويمكن إضافة جهة جديدة من القائمة نفسها)" />
     <ListCard secret={secret} listKey="decision_classes" list={DECISION_CLASSES} title="📑 تصنيفات القرارات الإدارية"
       hint="تظهر في قسم «القرارات الإدارية» عند إضافة قرار وفي التصفية" />
     <ListCard secret={secret} listKey="roles" list={ROLES} title="🪪 الصفات"
@@ -1692,6 +1753,42 @@ function ExcelLockCard({ secret }) {
           </div>
         </Field>
       )}
+    </div>
+  );
+}
+
+// بطاقة «التصدير والنسخ المحفوظة» (في الإعدادات فقط): تصدير كل الجداول لموسم مختار، واستعراض ملف Excel سابق
+function ExportCard({ secret, rows }) {
+  // الموسم المختار ("" = كل المواسم)، حالة التصدير، نافذة الاستعراض، والرسالة
+  const seasons = [...new Set((rows || []).map(c => c.season).filter(Boolean))].sort().reverse();
+  const [season, setSeason] = useState(seasons[0] || "");
+  const [busy, setBusy] = useState(false);
+  const [viewing, setViewing] = useState(false);
+  const [msg, setMsg] = useState(null);
+
+  // التصدير: الشكاوى والجلسات والإحالات للموسم المختار (مقفولة للعرض فقط)
+  async function exportAll() {
+    setBusy(true); setMsg(null);
+    try { await exportAllToExcel(secret, (rows || []).filter(c => !season || c.season === season)); }
+    catch (e) { setMsg({ type: "error", text: e.message || NET_ERR }); }
+    setBusy(false);
+  }
+
+  // العرض: اختيار الموسم، زر التصدير، وزر الاستعراض
+  return (
+    <div className="card">
+      <h2>💾 التصدير والنسخ المحفوظة</h2>
+      <p className="muted" style={{ fontSize: 14, marginTop: 0 }}>ملف Excel واحد بثلاث أوراق: الشكاوى، الجلسات، الإحالات — مقفول للعرض فقط. احفظ نسخة أسبوعياً.</p>
+      {msg && <Alert type={msg.type}>{msg.text}</Alert>}
+      <div className="row">
+        <select value={season} onChange={e => setSeason(e.target.value)} style={{ width: "auto", minWidth: 150 }} aria-label="الموسم">
+          <option value="">كل المواسم</option>
+          {seasons.map(x => <option key={x} value={x}>موسم {x}</option>)}
+        </select>
+        <button type="button" className="btn" disabled={busy || !rows} onClick={exportAll}>{busy ? "جارٍ التصدير…" : "📥 تصدير كل الجداول (Excel)"}</button>
+        <button type="button" className="btn secondary" onClick={() => setViewing(true)}>📂 استعراض نسخة محفوظة</button>
+      </div>
+      {viewing && <ExcelViewer onClose={() => setViewing(false)} />}
     </div>
   );
 }
@@ -1946,9 +2043,6 @@ function AdminComplaints({ secret, rows, onSaved, reload, onOpen, initialSearch 
   // التصفية والبحث (قد يبدآن بقيمة من الرئيسية)، وحالة التصدير الكامل
   const [filter, setFilter] = useState(initialFilter);
   const [search, setSearch] = useState(initialSearch);
-  const [exporting, setExporting] = useState(false);
-  const [exportErr, setExportErr] = useState("");
-  const [viewing, setViewing] = useState(false);   // نافذة استعراض نسخة محفوظة
 
   // الموسم المعروض: يبدأ بالموسم الحالي من الإعدادات ("" = كل المواسم)
   const [season, setSeason] = useState("");
@@ -1961,14 +2055,6 @@ function AdminComplaints({ secret, rows, onSaved, reload, onOpen, initialSearch 
   const [klass, setKlass] = useState("");
   const klasses = [...new Set([...CLASSIFICATIONS, ...(rows || []).map(c => c.classification)].filter(Boolean))];
   const inSeason = (rows || []).filter(c => (!season || c.season === season) && (!klass || c.classification === klass));
-
-  // تصدير كل الجداول (الشكاوى، الجلسات، السجل، الإحالة) إلى ملف Excel واحد
-  async function exportAll() {
-    setExporting(true); setExportErr("");
-    try { await exportAllToExcel(secret, inSeason); }
-    catch (e) { setExportErr(e.message || NET_ERR); }
-    setExporting(false);
-  }
 
   // التصفية بالحالة ونص البحث (الرقم، الأسماء، الموضوع، الرموز)
   const term = search.trim();
@@ -2000,11 +2086,7 @@ function AdminComplaints({ secret, rows, onSaved, reload, onOpen, initialSearch 
       <div className="row" style={{ marginBottom: 12 }}>
         <input className="grow" type="text" placeholder="بحث بالرقم أو الاسم أو الهاتف أو الموضوع أو الجهة…" value={search} onChange={e => setSearch(e.target.value)} />
         <button className="btn secondary" onClick={reload}>🔄 تحديث</button>
-        <button className="btn gold" disabled={exporting || !rows} onClick={exportAll} title="الشكاوى + الجلسات (للموسم المختار)">{exporting ? "جارٍ التصدير…" : "📥 تصدير كل الجداول (Excel)"}</button>
-        <button className="btn secondary" onClick={() => setViewing(true)}>📂 استعراض نسخة محفوظة</button>
       </div>
-      {viewing && <ExcelViewer onClose={() => setViewing(false)} />}
-      {exportErr && <Alert type="error">{exportErr}</Alert>}
       {rows === null ? <Loading /> : <ComplaintsTable secret={secret} rows={visible} onSaved={onSaved} onOpen={onOpen} />}
     </div>
   );
@@ -2024,6 +2106,8 @@ function ComplaintCard({ secret, complaint: c, onSaved, onSessionsChanged, fromD
     reminder_note: c.reminder_note || "",
   });
   const [closeReq, setCloseReq] = useState(0);   // طلب «إغلاق عبر جلسة» من مربع «المطلوب»
+  const [cardTab, setCardTab] = useState("follow");   // تبويب البطاقة: follow / sessions / results / objection
+  useEffect(() => { if (closeReq) setCardTab("sessions"); }, [closeReq]);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null);
   const v = vState;
@@ -2077,7 +2161,11 @@ function ComplaintCard({ secret, complaint: c, onSaved, onSessionsChanged, fromD
   // التنبيهات الذكية للشكوى كما هي محفوظة
   const alerts = smartAlerts(c);
 
-  // العرض: الرأس، التنبيهات، البيانات، الموضوع، ثم حقول الإدارة وزر الحفظ
+  // تبويبات البطاقة بعد المعلومات الأساسية
+  const CARD_TABS = [["follow", "⚙️ المتابعة"], ["sessions", "🗓️ الجلسات"], ["results", "📋 النتائج"], ["objection", "⚖️ الاعتراض"]];
+  const saveBtn = <button className="btn block" style={{ marginTop: 14 }} disabled={busy} onClick={() => save()}>{busy ? "جارٍ الحفظ…" : "💾 حفظ"}</button>;
+
+  // العرض: الرأس (الرقم والحالة وزر Word)، التنبيهات، المعلومات الأساسية، مربع «المطلوب»، ثم التبويبات
   return (
     <div className={`card status-card ${stClass(c.status)}`}>
       <div className="c-head">
@@ -2089,15 +2177,18 @@ function ComplaintCard({ secret, complaint: c, onSaved, onSessionsChanged, fromD
             {c.access_code && <span>🔑 <span dir="ltr">{c.access_code}</span></span>}
           </div>
         </div>
-        <StatusBadge value={c.status} />
+        <div className="c-head-actions">
+          <StatusBadge value={c.status} />
+          <button type="button" className="btn secondary sm" disabled={wordBusy} onClick={exportWord} title="تصدير ملف الشكوى الكامل (Word)">{wordBusy ? "…" : "📄 Word"}</button>
+        </div>
       </div>
       {alerts.map((a, i) => <div key={i} className={`reminder-bar ${a.level}`}>{a.level === "later" ? "🗓️" : "⏰"} {a.text}</div>)}
-      <div className="meta" style={{ fontSize: 14.5, color: "var(--ink)" }}>
-        <span>👤 المشتكي: <b>{c.complainant_name}</b>{c.complainant_role && <span className="muted"> ({c.complainant_role})</span>}</span>
-        <span>📞 <b dir="ltr">{c.phone_number || "—"}</b></span>
-        {c.contact_number && <span>💬 واتس/تلغرام: <b dir="ltr">{c.contact_number}</b></span>}
-        <span>⚠️ المشتكى عليه: <b>{c.accused_name || "—"}</b>{c.accused_role && <span className="muted"> ({c.accused_role})</span>}</span>
-      </div>
+      <dl className="detail-grid info-grid">
+        <div><dt>👤 المشتكي</dt><dd>{c.complainant_name}{c.complainant_role && <span className="muted"> ({c.complainant_role})</span>}</dd></div>
+        <div><dt>📞 الهاتف</dt><dd dir="ltr" style={{ textAlign: "right" }}>{c.phone_number || "—"}</dd></div>
+        {c.contact_number && <div><dt>💬 واتس / تلغرام</dt><dd dir="ltr" style={{ textAlign: "right" }}>{c.contact_number}</dd></div>}
+        <div><dt>⚠️ المشتكى عليه</dt><dd>{c.accused_name || "—"}{c.accused_role && <span className="muted"> ({c.accused_role})</span>}</dd></div>
+      </dl>
       {c.title && <div className="c-title">📝 {c.title}</div>}
       <div className="subject">{c.subject}</div>
       {msg && <Alert type={msg.type}>{msg.text}</Alert>}
@@ -2120,45 +2211,64 @@ function ComplaintCard({ secret, complaint: c, onSaved, onSessionsChanged, fromD
           </div>
         </div>
       )}
-      <div className="grid">
-        <Field label="التصنيف">
-          <select value={v.classification} onChange={set("classification")}>
-            <option value="">— اختر —</option>
-            {CLASSIFICATIONS.map(x => <option key={x}>{x}</option>)}
-            {v.classification && !CLASSIFICATIONS.includes(v.classification) && <option>{v.classification}</option>}
-          </select>
-        </Field>
-        <Field label="ترحيل / مُحالة إلى"><input type="text" value={v.referred_to} onChange={set("referred_to")} maxLength={200} placeholder="الجهة أو الشخص" /></Field>
-        <Field label="الحالة" hint="تتغيّر تلقائياً من الجلسات">
-          <div className="readonly-field"><StatusBadge value={c.status} />{c.closed_date && <span className="muted"> · أُغلقت {fmtDate(c.closed_date)}</span>}</div>
-        </Field>
-        {!fromDue && (
-          <>
-            <Field label="⏰ تنبيه يدوي (اختياري)" hint="يظهر في «المطلوب» في يومه">
-              <div className="row" style={{ flexWrap: "nowrap" }}>
-                <input type="datetime-local" value={v.reminder} onChange={set("reminder")} />
-                {v.reminder && <button type="button" className="btn danger-text" onClick={() => setV(x => ({ ...x, reminder: "", reminder_note: "" }))}>مسح</button>}
-              </div>
-            </Field>
-            <Field label="المطلوب عند التنبيه"><input type="text" value={v.reminder_note} onChange={set("reminder_note")} maxLength={500} placeholder="مثال: الاتصال بمسؤول السكن" /></Field>
-          </>
-        )}
-        <Field label="👤 النتيجة التي يراها المشتكي" hint="تظهر للمشتكي في صفحة «نتيجة الشكوى» — لا تأتي من الجلسات" full>
-          <textarea style={{ minHeight: 70 }} value={v.complainant_result} onChange={set("complainant_result")} maxLength={2000} />
-        </Field>
-        <Field label="⚖️ النتيجة التي يراها المعترض" hint="تظهر للمشتكى عليه في صفحة الاعتراض — لا تأتي من الجلسات" full>
-          <textarea style={{ minHeight: 70 }} value={v.accused_result} onChange={set("accused_result")} maxLength={2000} />
-        </Field>
+
+      <div className="tabs card-tabs">
+        {CARD_TABS.map(([k, t]) => <button key={k} type="button" className={cardTab === k ? "active" : ""} onClick={() => setCardTab(k)}>{t}</button>)}
       </div>
-      <ResultBox c={c} />
-      <ReferralsLine secret={secret} id={c.id} version={c.updated_at} />
-      <button className="btn block" style={{ marginTop: 14 }} disabled={busy} onClick={() => save()}>{busy ? "جارٍ الحفظ…" : "حفظ"}</button>
-      <SessionsSection secret={secret} complaint={c} onApplied={applyFromSession} onChanged={() => (onSessionsChanged || (() => {}))()} closeReq={closeReq} />
-      <ObjectionSection secret={secret} complaint={c} onSaved={onSaved} />
+
+      {cardTab === "follow" && (
+        <div className="card-pane">
+          <div className="grid">
+            <Field label="التصنيف">
+              <select value={v.classification} onChange={set("classification")}>
+                <option value="">— اختر —</option>
+                {CLASSIFICATIONS.map(x => <option key={x}>{x}</option>)}
+                {v.classification && !CLASSIFICATIONS.includes(v.classification) && <option>{v.classification}</option>}
+              </select>
+            </Field>
+            <Field label="ترحيل / مُحالة إلى"><ReferralSelect value={v.referred_to} onChange={val => setV(x => ({ ...x, referred_to: val }))} /></Field>
+            <Field label="الحالة" hint="تتغيّر تلقائياً من الجلسات">
+              <div className="readonly-field"><StatusBadge value={c.status} />{c.closed_date && <span className="muted"> · أُغلقت {fmtDate(c.closed_date)}</span>}</div>
+            </Field>
+            {!fromDue && (
+              <>
+                <Field label="⏰ تنبيه يدوي (اختياري)" hint="يظهر في «المطلوب» في يومه">
+                  <div className="row" style={{ flexWrap: "nowrap" }}>
+                    <input type="datetime-local" value={v.reminder} onChange={set("reminder")} />
+                    {v.reminder && <button type="button" className="btn danger-text" onClick={() => setV(x => ({ ...x, reminder: "", reminder_note: "" }))}>مسح</button>}
+                  </div>
+                </Field>
+                <Field label="المطلوب عند التنبيه"><input type="text" value={v.reminder_note} onChange={set("reminder_note")} maxLength={500} placeholder="مثال: الاتصال بمسؤول السكن" /></Field>
+              </>
+            )}
+          </div>
+          <ReferralsLine secret={secret} id={c.id} version={c.updated_at} />
+          {saveBtn}
+        </div>
+      )}
+
+      {cardTab === "sessions" && (
+        <SessionsSection secret={secret} complaint={c} onApplied={applyFromSession} onChanged={() => (onSessionsChanged || (() => {}))()} closeReq={closeReq} />
+      )}
+
+      {cardTab === "results" && (
+        <div className="card-pane">
+          <ResultBox c={c} />
+          <div className="grid" style={{ marginTop: 12 }}>
+            <Field label="👤 النتيجة التي يراها المشتكي" hint="تظهر للمشتكي في صفحة «نتيجة الشكوى» — لا تأتي من الجلسات" full>
+              <textarea style={{ minHeight: 70 }} value={v.complainant_result} onChange={set("complainant_result")} maxLength={2000} />
+            </Field>
+            <Field label="⚖️ النتيجة التي يراها المعترض" hint="تظهر للمشتكى عليه في صفحة الاعتراض — لا تأتي من الجلسات" full>
+              <textarea style={{ minHeight: 70 }} value={v.accused_result} onChange={set("accused_result")} maxLength={2000} />
+            </Field>
+          </div>
+          {saveBtn}
+        </div>
+      )}
+
+      {cardTab === "objection" && <ObjectionSection secret={secret} complaint={c} onSaved={onSaved} />}
+
       {finalClosed && <div className="locked-note">🔒 أُغلقت الشكوى نهائياً بعد الاعتراض — يمكن تعديل الجلسات فقط.</div>}
-      <button type="button" className="btn secondary block" style={{ marginTop: 14 }} disabled={wordBusy} onClick={exportWord}>
-        {wordBusy ? "جارٍ تجهيز الملف…" : "📄 تصدير ملف الشكوى (Word)"}
-      </button>
     </div>
   );
 }
@@ -2177,6 +2287,42 @@ function ResultBox({ c }) {
         <div className="muted" style={{ fontSize: 13.5, marginTop: 6 }}>النتيجة قبل الاعتراض: {c.result_before_objection}</div>
       )}
     </div>
+  );
+}
+
+// قائمة «ترحيل / مُحالة إلى»: الجهات المحفوظة + المستخدمة سابقاً، و«➕ جهة جديدة» تفتح خانة لإضافتها
+// (المدير: تُحفظ الجهة الجديدة في قائمة الإعدادات؛ الموظف: تُحفظ مع الشكوى فتظهر للجميع لاحقاً)
+function ReferralSelect({ value, onChange, placeholder = "— بلا إحالة —" }) {
+  const [adding, setAdding] = useState(false);
+  const [draft, setDraft] = useState("");
+  const opts = [...new Set([...REFERRAL_TARGETS, ...ADMIN_CTX.used, value].filter(Boolean))].sort((a, b) => a.localeCompare(b, "ar"));
+
+  // إضافة جهة جديدة واختيارها
+  function add() {
+    const v = draft.trim();
+    if (!v) return;
+    if (!REFERRAL_TARGETS.includes(v)) {
+      REFERRAL_TARGETS.push(v);
+      if (ADMIN_CTX.manager) sb.rpc("admin_set_list", { p_secret: ADMIN_CTX.secret, p_key: "referral_targets", p_items: REFERRAL_TARGETS });
+    }
+    onChange(v); setAdding(false); setDraft("");
+  }
+
+  // العرض: خانة الإضافة، أو القائمة المنسدلة
+  if (adding) return (
+    <div className="row" style={{ flexWrap: "nowrap" }}>
+      <input type="text" autoFocus value={draft} onChange={e => setDraft(e.target.value)} maxLength={200} placeholder="اسم الجهة أو الشخص"
+        onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); add(); } }} />
+      <button type="button" className="btn sm" onClick={add}>إضافة</button>
+      <button type="button" className="btn secondary sm" onClick={() => setAdding(false)}>إلغاء</button>
+    </div>
+  );
+  return (
+    <select value={value || ""} onChange={e => e.target.value === "__new" ? setAdding(true) : onChange(e.target.value)}>
+      <option value="">{placeholder}</option>
+      {opts.map(o => <option key={o} value={o}>{o}</option>)}
+      <option value="__new">➕ جهة جديدة…</option>
+    </select>
   );
 }
 
@@ -2322,7 +2468,7 @@ const sessionStatus = (complaint, s, at) => sessionStatuses(complaint, at)[isClo
 
 function SessionsSection({ secret, complaint, onApplied, onChanged, closeReq = 0 }) {
   // سجل الجلسات، النموذج (جلسة جديدة أو تعديل جلسة: editId)، والرسائل
-  const blank = () => ({ at: toDateTimeInput(new Date()), title: "", topic: "", referred_to: complaint.referred_to || "", result: "",
+  const blank = () => ({ at: toDateTimeInput(new Date()), title: "", location: "", topic: "", referred_to: complaint.referred_to || "", result: "",
                          status: sessionStatus(complaint, complaint.status),
                          cresult: complaint.complainant_result || "", aresult: complaint.accused_result || "" });
   const [list, setList] = useState(null);
@@ -2343,7 +2489,7 @@ function SessionsSection({ secret, complaint, onApplied, onChanged, closeReq = 0
   // بدء تعديل جلسة: تعبئة النموذج بقيمها
   function startEdit(s) {
     setEditId(s.id);
-    setForm({ at: toDateTimeInput(s.session_at), title: s.title || "", topic: s.topic || "", referred_to: s.referred_to || "", result: s.result || "",
+    setForm({ at: toDateTimeInput(s.session_at), title: s.title || "", location: s.location || "", topic: s.topic || "", referred_to: s.referred_to || "", result: s.result || "",
               status: sessionStatus(complaint, s.status, s.session_at),
               cresult: complaint.complainant_result || "", aresult: complaint.accused_result || "" });
     setMsg(null);
@@ -2371,11 +2517,12 @@ function SessionsSection({ secret, complaint, onApplied, onChanged, closeReq = 0
     if (closing && !form.cresult.trim()) return setMsg({ type: "error", text: "اكتب النص الذي يظهر للمشتكي في صفحة «نتيجة الشكوى» قبل الإغلاق." });
     if (closing && complaint.objection_at && !form.aresult.trim()) return setMsg({ type: "error", text: "اكتب الرد الذي يظهر للمعترض في صفحة الاعتراض قبل الإغلاق." });
     setBusy(true); setMsg(null);
-    const args = { p_secret: secret, p_session_at: dateTimeInputToIso(form.at), p_title: form.title, p_topic: form.topic,
+    const args = { p_secret: secret, p_session_at: dateTimeInputToIso(form.at), p_title: form.title, p_location: form.location, p_topic: form.topic,
                    p_referred_to: form.referred_to, p_result: form.result, p_status: form.status };
-    const { data, error } = editId
-      ? await sb.rpc("admin_update_session", { ...args, p_id: editId })
-      : await sb.rpc("admin_add_session", { ...args, p_complaint_id: complaint.id });
+    const send = a => editId ? sb.rpc("admin_update_session", { ...a, p_id: editId }) : sb.rpc("admin_add_session", { ...a, p_complaint_id: complaint.id });
+    let { data, error } = await send(args);
+    // قاعدة لم يُنفَّذ فيها القسم 30 بعد: النسخة القديمة بلا «المكان»
+    if (error && /function|schema cache/i.test(error.message || "")) { const { p_location, ...old } = args; ({ data, error } = await send(old)); }
     setBusy(false);
     if (error && /مغلقة/.test(error.message || "")) return setMsg({ type: "error", text: "الشكوى مغلقة: يمكن تعديل جلساتها فقط." });
     if (error || !data || !data.length) return setMsg({ type: "error", text: editId ? "تعذّر تعديل الجلسة، يرجى المحاولة مرة أخرى." : "تعذّر إضافة الجلسة، يرجى المحاولة مرة أخرى." });
@@ -2403,12 +2550,13 @@ function SessionsSection({ secret, complaint, onApplied, onChanged, closeReq = 0
       {list === null ? <Loading /> : list.length === 0 ? <p className="muted" style={{ marginTop: 0 }}>لا توجد جلسات لهذه الشكوى بعد.</p> : (
         <div className="table-wrap" style={{ maxHeight: 280, marginBottom: 12, border: "1px solid var(--line)" }}>
           <table className="sheet">
-            <thead><tr><th>التاريخ والوقت</th><th>عنوان الجلسة</th><th>موضوع الجلسة</th><th>ترحيل / مُحالة إلى</th><th>نتيجة الجلسة</th><th>حالة الشكوى</th><th></th></tr></thead>
+            <thead><tr><th>التاريخ والوقت</th><th>عنوان الجلسة</th><th>المكان</th><th>موضوع الجلسة</th><th>ترحيل / مُحالة إلى</th><th>نتيجة الجلسة</th><th>حالة الشكوى</th><th></th></tr></thead>
             <tbody>
               {list.map(s => (
                 <tr key={s.id} className={`status-row ${stClass(s.status)} ${editId === s.id ? "selected" : ""}`} style={{ cursor: "default" }}>
                   <td>{fmtDateTime(s.session_at)}</td>
                   <td><b>{s.title || <span className="muted">—</span>}</b></td>
+                  <td>{s.location || <span className="muted">—</span>}</td>
                   <td className="wrap">{s.topic || <span className="muted">—</span>}</td>
                   <td>{s.referred_to || <span className="muted">—</span>}</td>
                   <td className="wrap">{s.result || <span className="muted">—</span>}</td>
@@ -2428,7 +2576,8 @@ function SessionsSection({ secret, complaint, onApplied, onChanged, closeReq = 0
         <div className="grid">
           <Field label="التاريخ والوقت" required><input type="datetime-local" value={form.at} onChange={set("at")} /></Field>
           <Field label="عنوان الجلسة"><input type="text" value={form.title} onChange={set("title")} maxLength={200} placeholder="مثال: جلسة استماع للطرفين" /></Field>
-          <Field label="ترحيل / مُحالة إلى"><input type="text" value={form.referred_to} onChange={set("referred_to")} maxLength={200} placeholder="الجهة أو الشخص" /></Field>
+          <Field label="📍 المكان / الوصف"><input type="text" value={form.location} onChange={set("location")} maxLength={300} placeholder="مثال: مكتب البعثة — مكة، أو اتصال مرئي" /></Field>
+          <Field label="ترحيل / مُحالة إلى"><ReferralSelect value={form.referred_to} onChange={val => setForm(f => ({ ...f, referred_to: val }))} /></Field>
           <Field label="حالة الشكوى بعد الجلسة" required hint="«مغلقة» تغلق الشكوى بتاريخ الجلسة">
             <select value={form.status} onChange={set("status")}>{sessionStatuses(complaint, editId ? form.at : null).map(x => <option key={x}>{x}</option>)}</select>
           </Field>
@@ -2511,7 +2660,7 @@ function AdminSessions({ secret, version, onOpen }) {
         {list === null ? <Loading /> : visible.length === 0 ? <div className="empty">لا توجد جلسات</div> : (
           <div className="table-wrap">
             <table className="sheet">
-              <thead><tr><th>رقم الشكوى</th><th>المشتكي</th><th>التاريخ والوقت</th><th>عنوان الجلسة</th><th>ترحيل / مُحالة إلى</th><th>نتيجة الجلسة</th><th>حالة الشكوى</th></tr></thead>
+              <thead><tr><th>رقم الشكوى</th><th>المشتكي</th><th>التاريخ والوقت</th><th>عنوان الجلسة</th><th>المكان</th><th>ترحيل / مُحالة إلى</th><th>نتيجة الجلسة</th><th>حالة الشكوى</th></tr></thead>
               <tbody>
                 {visible.map(s => (
                   <tr key={s.id} className={`status-row ${stClass(s.status)}`} onClick={() => onOpen({ id: s.complaint_id })}>
@@ -2519,6 +2668,7 @@ function AdminSessions({ secret, version, onOpen }) {
                     <td>{s.complainant_name}</td>
                     <td>{fmtDateTime(s.session_at)}</td>
                     <td><b>{s.title || <span className="muted">—</span>}</b></td>
+                    <td>{s.location || <span className="muted">—</span>}</td>
                     <td>{s.referred_to || <span className="muted">—</span>}</td>
                     <td className="wrap"><span className="clip">{s.result || "—"}</span></td>
                     <td><StatusBadge value={s.status} /></td>
@@ -3520,7 +3670,6 @@ function ReportsPage({ code, viewerName }) {
   // بطاقة الشكوى: هل سمح الأدمن بعرضها؟ ورقم الشكوى المفتوحة
   const [cardOn, setCardOn] = useState(false);
   const [openNum, setOpenNum] = useState(null);
-  const [viewing, setViewing] = useState(false);   // نافذة استعراض نسخة محفوظة
   useEffect(() => {
     sb.rpc("viewer_card_enabled", { p_code: code }).then(({ data }) => setCardOn(data === true));
   }, [code]);
@@ -3579,7 +3728,6 @@ function ReportsPage({ code, viewerName }) {
           <button className="btn secondary sm" onClick={() => preset("month")}>هذا الشهر</button>
           <button className="btn secondary sm" onClick={() => preset("30")}>آخر 30 يوماً</button>
           <button className="btn secondary sm" onClick={() => preset("all")}>كل الفترات</button>
-          <button className="btn secondary sm" onClick={() => setViewing(true)}>📂 استعراض نسخة محفوظة</button>
         </div>
       </div>
       {error && <Alert type="error">{error}</Alert>}
@@ -3629,7 +3777,6 @@ function ReportsPage({ code, viewerName }) {
         </>
       )}
       {openNum && <ReportCard code={code} number={openNum} onClose={() => setOpenNum(null)} />}
-      {viewing && <ExcelViewer onClose={() => setViewing(false)} />}
     </div>
   );
 }
@@ -3699,12 +3846,13 @@ function ReportCard({ code, number, onClose }) {
               {card.sessions.length === 0 ? <p className="muted" style={{ margin: 0 }}>لا توجد جلسات.</p> : (
                 <div className="table-wrap" style={{ maxHeight: 280, border: "1px solid var(--line)" }}>
                   <table className="sheet">
-                    <thead><tr><th>التاريخ والوقت</th><th>عنوان الجلسة</th><th>موضوع الجلسة</th><th>ترحيل / مُحالة إلى</th><th>نتيجة الجلسة</th><th>الحالة</th></tr></thead>
+                    <thead><tr><th>التاريخ والوقت</th><th>عنوان الجلسة</th><th>المكان</th><th>موضوع الجلسة</th><th>ترحيل / مُحالة إلى</th><th>نتيجة الجلسة</th><th>الحالة</th></tr></thead>
                     <tbody>
                       {card.sessions.map((s, i) => (
                         <tr key={i} className={`status-row ${stClass(s.status)}`} style={{ cursor: "default" }}>
                           <td>{fmtDateTime(s.session_at)}</td>
                           <td><b>{s.title || <span className="muted">—</span>}</b></td>
+                          <td>{s.location || <span className="muted">—</span>}</td>
                           <td className="wrap">{s.topic || <span className="muted">—</span>}</td>
                           <td>{s.referred_to || <span className="muted">—</span>}</td>
                           <td className="wrap">{s.result || <span className="muted">—</span>}</td>
@@ -3765,7 +3913,7 @@ function App() {
   if (!sb) page = <SetupNotice />;
   else if (hash === "#/admin") {
     label = "الأدمن";
-    if (adminSecret) { page = <AdminPage secret={adminSecret} />; logout = () => setAdmin(null); }
+    if (adminSecret) { page = <AdminPage secret={adminSecret} onLogout={() => setAdmin(null)} />; logout = () => setAdmin(null); }
     else page = <GatePage title="صفحة الأدمن" label="كلمة مرور الأدمن" secret account="admin" remember verify={verifyAdmin} onPass={setAdmin}
                   footer={cfg.ACTIVATE_URL && <div className="below-link"><a href={cfg.ACTIVATE_URL} target="_blank" rel="noopener">⚡ المنصة لا تعمل؟ تنشيط قاعدة البيانات</a></div>} />;
   } else if (hash === "#/reports") {
@@ -3780,7 +3928,7 @@ function App() {
   // العرض: الشريط العلوي ثم الصفحة المختارة
   return (
     <>
-      <Header label={label} onLogout={logout} />
+      {!(hash === "#/admin" && adminSecret) && <Header label={label} onLogout={logout} />}
       <main className={`container${hash === "#/admin" && adminSecret ? " admin-wide" : ""}`}>{page}</main>
     </>
   );

@@ -78,6 +78,8 @@
     2026-09-30  تنسيقات الشاشة الرئيسية للأدمن (.tile / .home-tiles / .section-bar).
     2026-09-30  تنسيقات خطوات نموذج الشكوى (.steps / .step-buttons).
     2026-09-30  لون حالة «مغلقة بعد الاعتراض» (.st-closedobj).
+    2026-10-01  الترويسة أعلى القائمة والمستخدم أسفلها (.side-user)، شريط المحتوى العلوي (.admin-top)، تبويبات بطاقة
+                الشكوى (.card-tabs)، ورئيسية تملأ الشاشة (.home-hero / .home-grid / .home-list).
     2026-10-01  القائمة الجانبية في أقصى اليمين (.admin-wide)؛ تنسيقات المؤشرات (.ind-* / .bars / .cols).
     2026-09-30  القائمة الجانبية للوحة الإدارة (.admin-shell / .side / .side-item …) ومنزلقة على الجوال.
     2026-09-30  تنسيقات دليل المنصة (.flow / .flow-step / .flow-label).
@@ -451,9 +453,9 @@
   /* لوحة الإدارة: قائمة جانبية على اليمين + المحتوى؛ القائمة بلون الهوية الداكن، والعنصر النشط أبيض بشريط ذهبي */
   /* لوحة الإدارة بعرض الشاشة: القائمة ملتصقة بأقصى اليمين بطول الصفحة، والمحتوى بجانبها */
   .container.admin-wide { max-width: none; padding: 0; }
-  .admin-shell { display: grid; grid-template-columns: 260px minmax(0, 1fr); align-items: stretch; min-height: calc(100vh - 64px); }
+  .admin-shell { display: grid; grid-template-columns: 260px minmax(0, 1fr); align-items: stretch; min-height: 100vh; }
   .admin-main { min-width: 0; width: 100%; max-width: 1200px; margin: 0 auto; padding: 22px 22px calc(48px + env(safe-area-inset-bottom, 0px)); }
-  .side { position: sticky; top: 0; align-self: start; height: calc(100vh - 64px); overflow-y: auto;
+  .side { position: sticky; top: 0; align-self: start; height: 100vh; overflow-y: auto; display: flex; flex-direction: column;
           background: linear-gradient(180deg, var(--brand-dark), #00463e); color: #fff;
           border-radius: 0 0 0 18px; padding: 16px 10px; box-shadow: -2px 0 18px rgba(0, 89, 79, .18); }
   .side-head { display: flex; align-items: center; gap: 10px; padding: 4px 8px 14px; margin-bottom: 8px; border-bottom: 1px solid rgba(255,255,255,.14); }
@@ -474,6 +476,15 @@
   .side-item.active .side-count { background: var(--brand-soft); color: var(--brand-dark); }
   .side-item.active .side-count.hot { background: var(--danger); color: #fff; }
   .side-group { margin: 16px 12px 6px; font-size: 12.5px; font-weight: 800; color: var(--gold-light); }
+  /* أسفل القائمة: اسم المستخدم ودوره */
+  .side-user { margin-top: auto; display: flex; align-items: center; gap: 10px; padding: 14px 10px 4px; border-top: 1px solid rgba(255,255,255,.14); }
+  .side-avatar { width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; background: rgba(255,255,255,.12); font-size: 20px; flex-shrink: 0; }
+  /* شريط أعلى المحتوى: زر القائمة (جوال)، عنوان القسم، ثم دليل المنصة وخروج */
+  .admin-top { position: sticky; top: 0; z-index: 30; display: flex; align-items: center; gap: 10px; margin: -22px -22px 18px; padding: 12px 22px;
+               background: rgba(245, 241, 234, .94); backdrop-filter: blur(6px); border-bottom: 1px solid var(--line); }
+  .admin-title { margin: 0; font-size: 19px; color: var(--brand-dark); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .admin-top-actions { display: flex; gap: 8px; flex-shrink: 0; }
+  .btn.is-on { background: var(--brand-soft); border-color: var(--brand-light); color: var(--brand-dark); }
   .menu-btn { display: none; font-size: 20px; min-width: 46px; }
   .side-backdrop { display: none; }
   .home-hint { font-size: 13.5px; margin-top: 16px; }
@@ -482,6 +493,8 @@
   @media (max-width: 899px) {
     .admin-shell { display: block; min-height: 0; }
     .admin-main { padding: 18px 16px calc(48px + env(safe-area-inset-bottom, 0px)); }
+    .admin-top { margin: -18px -16px 14px; padding: 10px 16px; }
+    .admin-title { font-size: 17px; }
     .side { position: fixed; top: 0; bottom: 0; right: 0; height: auto; width: min(290px, 84vw); z-index: 70; overflow-y: auto; border-radius: 18px 0 0 18px;
             padding-top: calc(14px + env(safe-area-inset-top, 0px)); transform: translateX(105%); visibility: hidden;
             transition: transform .24s ease, visibility .24s; }
@@ -491,6 +504,34 @@
     .menu-btn { display: inline-flex; }
     .only-phone { display: inline; }
   }
+  @media (max-width: 480px) { .hide-xs { display: none; } }
+
+  /* بطاقة الشكوى: أزرار الرأس، شبكة المعلومات الأساسية، وتبويبات بعدها */
+  .c-head-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+  .info-grid { margin: 12px 0 4px; padding: 12px 14px; background: #faf8f4; border: 1px solid var(--line); border-radius: 12px; }
+  .card-tabs { margin: 16px 0 12px; position: sticky; top: 0; z-index: 2; }
+  .card-pane { animation: fadeIn .15s ease; }
+  @keyframes fadeIn { from { opacity: .4; } to { opacity: 1; } }
+
+  /* الرئيسية: شريط ترحيب بلون الهوية، البطاقات، ثم ثلاث قوائم قصيرة جنباً إلى جنب */
+  .home-hero { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 14px 24px; padding: 20px 22px; margin-bottom: 16px;
+               border-radius: 18px; color: #fff; background: linear-gradient(120deg, var(--brand-dark), var(--brand) 60%, var(--brand-light)); box-shadow: 0 8px 24px rgba(0, 89, 79, .18); }
+  .home-hero .home-hello { margin: 0; font-size: 21px; }
+  .home-date { color: var(--gold-light); font-size: 14px; margin-top: 4px; }
+  .home-hero .home-search { margin: 0; flex: 1 1 320px; max-width: 560px; }
+  .home-hero .home-search input { border-color: transparent; }
+  .home .home-tiles { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .home-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-top: 14px; }
+  .home-grid .card { margin: 0; }
+  .home-list-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+  .home-list-head h2 { margin: 0; font-size: 16px; }
+  .home-list ul { list-style: none; margin: 0; padding: 0; }
+  .home-list li { display: flex; align-items: center; gap: 10px; padding: 9px 6px; border-bottom: 1px solid var(--line); cursor: pointer; border-radius: 8px; font-size: 14px; }
+  .home-list li:last-child { border-bottom: 0; }
+  .home-list li:hover { background: #f5f1ea; }
+  .home-list li .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  @media (max-width: 1100px) { .home-grid { grid-template-columns: 1fr 1fr; } }
+  @media (max-width: 760px) { .home .home-tiles { grid-template-columns: 1fr 1fr; } .home-grid { grid-template-columns: 1fr; } .home-hero { padding: 16px; } }
 
   /* شريط أعلى القسم المفتوح: زر الرئيسية وعنوان القسم */
   .section-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
@@ -614,6 +655,6 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4"></script>
 
 <!-- كود التطبيق جاهزاً (مولَّد من src/app.jsx بالأمر python build.py) -->
-<script src="app.js?v=316b8ea3ad"></script>
+<script src="app.js?v=b010f5b631"></script>
 </body>
 </html>
